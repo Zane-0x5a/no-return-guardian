@@ -8,7 +8,9 @@ from unittest import mock
 import multiprocessing
 import time
 
-from NativeCheckpointTrigger import ProbeError, approved_context, arguments, main, stop_guarded_process, supervise_worker, supervised_main, wait_worker
+from types import SimpleNamespace
+
+from NativeCheckpointTrigger import ProbeError, approved_context, arguments, main, process_birth, stop_guarded_process, supervise_worker, supervised_main, wait_worker
 
 
 def hung_worker():
@@ -24,6 +26,31 @@ def successful_worker():
 
 
 class NativeCheckpointTriggerTests(unittest.TestCase):
+    def test_process_birth_is_the_creation_time_while_the_game_runs_and_none_once_it_exits(self):
+        # A held handle keeps its creation time after the process exits; only the exit code tells.
+        def exit_code(value):
+            def read(handle, pointer):
+                pointer._obj.value = value
+                return True
+            return read
+
+        def times(handle, created, *rest):
+            created._obj.dwHighDateTime, created._obj.dwLowDateTime = 1, 2
+            return True
+
+        kernel = mock.Mock()
+        kernel.GetProcessTimes.side_effect = times
+        process = SimpleNamespace(kernel=kernel, handle=7)
+        kernel.GetExitCodeProcess.side_effect = exit_code(259)
+        self.assertEqual(process_birth(process), (1 << 32) | 2)
+        kernel.GetExitCodeProcess.side_effect = exit_code(0)
+        self.assertIsNone(process_birth(process))
+        self.assertEqual(kernel.GetProcessTimes.call_count, 1)
+        kernel.GetExitCodeProcess.side_effect = None
+        kernel.GetExitCodeProcess.return_value = False
+        with self.assertRaisesRegex(ProbeError, 'exit code'):
+            process_birth(process)
+
     identity = {'pid': 11, 'birth': 22, 'sha256': 'verified', 'path': 'game', 'base': '0x10000'}
 
     def test_load_observer_is_bounded_and_cannot_enable_native_control(self):

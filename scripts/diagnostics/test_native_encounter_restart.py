@@ -338,11 +338,12 @@ class RecorderTests(unittest.TestCase):
         return {'runActive': active, 'runInitialized': 1, 'story': 2, 'task': '0x9000', 'taskWord': word}
 
     def record(self, events, watched=(), arrival=None, snapshot='target', protecting=False, protect=None,
-               before_armed=()):
+               before_armed=(), births=None):
         """Arm in the hideout, let the control loop poll `watched` states, then return `events`.
 
         `protecting` passes a save profile; `protect` then stands in for binding the departure save and
-        publishing it, returning the new snapshot id or raising.
+        publishing it, returning the new snapshot id or raising. `births` are the game's successive
+        creation-time readings, None once it has exited; by default it keeps running.
         """
         states = [*before_armed, self.hideout(), *watched, *([arrival] if arrival else [])]
         self.protected = []
@@ -391,7 +392,8 @@ class RecorderTests(unittest.TestCase):
                                   ('NativeEncounterRestart.time.monotonic',
                                    mock.Mock(side_effect=itertools.count(1000, 2))),
                                   ('NativeDepartureRecorder.fingerprints', mock.Mock(return_value=CODE)),
-                                  ('NativeDepartureRecorder.process_birth', mock.Mock(return_value=22)),
+                                  ('NativeDepartureRecorder.process_birth',
+                                   mock.Mock(side_effect=births) if births else mock.Mock(return_value=22)),
                                   ('NativeDepartureRecorder.verify_live', mock.Mock()),
                                   ('NativeDepartureRecorder.HideoutStage', Stage),
                                   ('NativeDepartureRecorder.protect_departure', mock.Mock(side_effect=publish))):
@@ -484,6 +486,23 @@ class RecorderTests(unittest.TestCase):
         self.assertEqual((code, self.departures), (4, {}))
         self.assertEqual(log[-2], {'kind': 'departure-recorder-stopped',
                                    'reason': 'departure-not-protected: departure-save-not-observed'})
+
+    def test_a_game_exit_stops_the_recorder_quietly_even_when_it_fails_a_read_first(self):
+        stopped = lambda log: next(entry for entry in log if entry['kind'] == 'departure-recorder-stopped')
+        # Start and attach see the game; the hideout watch then sees it gone.
+        code, log, _ = self.record([], watched=[self.hideout()], protecting=True, births=[22, 22, None])
+        self.assertEqual((code, stopped(log)['reason']), (4, 'game-exited'))
+        # The game closes while a read is in flight: the read fails before any check sees the exit.
+        torn = ProbeError('memory read failed at 0x7ff661acad10: 299')
+        code, log, _ = self.record([], watched=[torn], protecting=True, births=[22, 22, 22, None])
+        self.assertEqual((code, stopped(log)), (4, {'kind': 'departure-recorder-stopped', 'reason': 'game-exited',
+                                                    'error': str(torn)}))
+        # The same failure while the game still runs stays an error.
+        code, log, _ = self.record([], watched=[torn], protecting=True)
+        self.assertEqual((code, stopped(log)['reason']), (3, str(torn)))
+        # A game that is gone before the recorder starts is a game exit too.
+        code, log, _ = self.record([], protecting=True, births=[None, None])
+        self.assertEqual((code, stopped(log)['reason']), (4, 'game-exited'))
 
     def test_a_protecting_recorder_waits_through_encounters_but_their_owner_does_not_carry_over(self):
         code, log, _ = self.record(self.captured(), arrival=self.hideout(word=1), protecting=True,

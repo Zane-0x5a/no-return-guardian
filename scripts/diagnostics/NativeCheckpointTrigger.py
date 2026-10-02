@@ -72,7 +72,23 @@ def resolve_entry(observed, unloaded_menu):
         return 'results'
 
 
+STILL_ACTIVE = 259
+
+
 def process_birth(process):
+    """The process's creation time while it runs, None once it has exited.
+
+    Comparing this with the birth taken at attach is how every script checks that it still has the same
+    live game. A held handle keeps reporting its creation time after the process exits, so the exit code
+    is read first; without it that comparison never noticed the game closing.
+    """
+    process.kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    process.kernel.GetExitCodeProcess.restype = wintypes.BOOL
+    exit_code = wintypes.DWORD()
+    if not process.kernel.GetExitCodeProcess(process.handle, ctypes.byref(exit_code)):
+        raise ProbeError('Cannot read the game process exit code')
+    if exit_code.value != STILL_ACTIVE:
+        return None
     signature = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
     process.kernel.GetProcessTimes.argtypes = signature
     process.kernel.GetProcessTimes.restype = wintypes.BOOL
@@ -286,6 +302,8 @@ def supervised_main(argv=None):
         process = ReadOnlyProcess(args.pid)
         verify_build(process.image_path().read_bytes())
         birth = process_birth(process)
+        if birth is None:
+            raise ProbeError('The game has exited')
         recovery_preflight = None
         if args.mode == 'recover-preparation':
             from NativeRecoverySource import prepare_source, secure_live_state, verify_unloaded_menu
@@ -469,6 +487,8 @@ def main(argv=None, recovery_preflight=None):
         verify_live(process, base, code)
         identity = {'pid': args.pid, 'birth': process_birth(process), 'sha256': digest,
                     'path': str(path), 'base': hex(base)}
+        if identity['birth'] is None:
+            raise ProbeError('The game has exited')
         configuration = {'pid': args.pid, 'base': hex(base), 'fingerprints': code,
                          'mode': args.mode, 'duration': args.duration,
                          'lifecycleContent': args.lifecycle_content}

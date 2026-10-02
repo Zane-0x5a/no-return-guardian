@@ -39,6 +39,14 @@ class Stopped(Exception):
         self.reason, self.fields = reason, fields
 
 
+def game_exited(process):
+    """Whether the game behind `process` has exited; False when that cannot be told."""
+    try:
+        return process is not None and process_birth(process) is None
+    except ProbeError:
+        return False
+
+
 def arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('pid', type=int)
@@ -186,6 +194,8 @@ def record_departure(argv=None):
             digest = verify_build(image)
             base = process.image_base()
             birth = process_birth(process)
+            if birth is None:
+                raise Stopped('game-exited')
             code = fingerprints(image, 'encounter-control')
             verify_live(process, base, code)
             record({'kind': 'departure-recorder-start', 'pid': args.pid, 'birth': birth, 'time': time.time(),
@@ -231,6 +241,10 @@ def record_departure(argv=None):
             record({'kind': 'departure-recorder-stopped', 'reason': stop.reason, **stop.fields})
             return 4
         except (ProbeError, OSError, ValueError) as error:
+            # The game closing fails the next read before any check sees the exit: that is a game exit.
+            if game_exited(process):
+                record({'kind': 'departure-recorder-stopped', 'reason': 'game-exited', 'error': str(error)})
+                return 4
             record({'kind': 'departure-recorder-stopped', 'reason': str(error)})
             return 3
         except Exception as error:
