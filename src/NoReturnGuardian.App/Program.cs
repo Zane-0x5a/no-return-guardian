@@ -294,7 +294,7 @@ namespace NoReturnGuardian
             }
 
             MessageBox.Show(
-                "工具遇到未处理错误。原始游戏存档不会被后台覆盖；请查看 guardian-error.log。",
+                "守护器出了意外错误。如果它表现异常，从托盘图标菜单退出后重新打开。",
                 "赴死之旅守护器",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
