@@ -60,12 +60,21 @@ export interface ViewState {
     showUndo: boolean;
     /** 右侧面板的透明度，0 不透明 · 100 只剩磨砂 */
     panelTransparency: number;
-    /** 每天向 GitHub 查一次有没有新的正式版 */
+    /** 每天查一次 GitHub 上有没有新的正式版 */
     checkUpdates: boolean;
     profilePath: string;
   };
-  /** 当前版本；available 是 GitHub 上更新的正式版，没有或关了检查更新时为空 */
-  version: { current: string; available: string | null };
+  /**
+   * 当前版本；available 是 GitHub 上更新的正式版，没有或关了检查更新时为空。
+   * installable：装在安装位置，“更新”直接下载安装；便携版只能打开下载页。progress 是下载百分比。
+   */
+  version: {
+    current: string;
+    available: string | null;
+    installable: boolean;
+    phase: 'idle' | 'downloading' | 'installing' | 'failed';
+    progress: number;
+  };
   library: { count: number; size: string; preparations: number; scenes: number };
   busy: boolean;
   /** 有原生恢复在进行（包括游戏内快捷键发起的） */
@@ -114,5 +123,6 @@ export type Command =
   | { name: 'show-undo'; value: boolean }
   | { name: 'panel-transparency'; value: number }
   | { name: 'check-updates'; value: boolean }
+  | { name: 'update' }
   | { name: 'open-release' }
   | { name: 'window'; action: 'minimize' | 'close' | 'maximize' };

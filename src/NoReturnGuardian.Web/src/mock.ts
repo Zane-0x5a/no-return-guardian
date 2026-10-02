@@ -1,6 +1,7 @@
 import type { Command, HostMessage, Mode, SnapshotView, ViewState } from './types';
 
-// 浏览器预览用的模拟宿主：?scene=guarding|observing|idle|alert|empty|noprofile|blocked，?update=1 有新版本
+// 浏览器预览用的模拟宿主：?scene=guarding|observing|idle|alert|empty|noprofile|blocked，
+// ?update=1 有新版本（?update=portable 是便携版，只能打开下载页）
 // 只模拟界面会看到的结果，不代表真实门控。
 
 type Listener = (message: HostMessage) => void;
@@ -67,7 +68,13 @@ export function createMockHost() {
       checkUpdates: true,
       profilePath: 'C:\\Users\\Player\\Documents\\The Last of Us Part II\\76561198000000000',
     },
-    version: { current: '1.0.0', available: params.get('update') === '1' ? '1.0.1' : null },
+    version: {
+      current: '1.0.0',
+      available: params.get('update') ? '1.0.1' : null,
+      installable: params.get('update') !== 'portable',
+      phase: 'idle',
+      progress: 0,
+    },
     library: { count: snapshots.length, size: '70.9 MB', preparations: 4, scenes: 3 },
     busy: false,
     working: false,
@@ -160,8 +167,22 @@ export function createMockHost() {
       case 'check-updates':
         push({
           settings: { ...state.settings, checkUpdates: command.value },
-          version: { ...state.version, available: command.value && params.get('update') === '1' ? '1.0.1' : null },
+          version: { ...state.version, available: command.value && params.get('update') ? '1.0.1' : null },
         });
+        break;
+      case 'update':
+        if (!state.version.installable) {
+          toast('已打开下载页', 'neutral');
+          break;
+        }
+        for (let progress = 0; progress <= 100; progress += 4) {
+          window.setTimeout(() => push({ version: { ...state.version, phase: 'downloading', progress } }), progress * 40);
+        }
+        window.setTimeout(() => push({ version: { ...state.version, phase: 'installing' } }), 4300);
+        window.setTimeout(() => {
+          push({ version: { ...state.version, current: '1.0.1', available: null, phase: 'idle', progress: 0 } });
+          toast('已更新到 1.0.1');
+        }, 7000);
         break;
       case 'open-release':
         toast('已打开下载页', 'neutral');

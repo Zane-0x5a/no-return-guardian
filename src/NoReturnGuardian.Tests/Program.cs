@@ -4,8 +4,12 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 
 namespace NoReturnGuardian.Tests
 {
@@ -95,7 +99,9 @@ namespace NoReturnGuardian.Tests
             new TestCase("monitor ignores transient incomplete state", TestMonitorTransientLoss),
             new TestCase("release feed reads only published vX.Y.Z releases from GitHub's redirect", TestReleaseFeedParsing),
             new TestCase("release feed compares versions and builds the page from the version alone", TestReleaseFeedComparison),
-            new TestCase("update checks default on, also for an older settings file", TestUpdateSettingsDefault)
+            new TestCase("update checks default on, also for an older settings file", TestUpdateSettingsDefault),
+            new TestCase("release checksums are read from the published list, file by file", TestReleaseChecksums),
+            new TestCase("an update installer is kept only when its checksum and version match the release", TestReleaseDownload)
         };
 
         private static int Main()
@@ -2075,6 +2081,79 @@ namespace NoReturnGuardian.Tests
             }
         }
 
+        private static void TestReleaseChecksums()
+        {
+            string hash = new string('a', 64);
+            string sums = hash + "  NoReturnGuardian-1.0.1-setup.exe\r\n"
+                + new string('B', 64) + " *NoReturnGuardian-1.0.1-win-x64.zip\n"
+                + "not-a-hash  broken.exe\n";
+            Assert.Equal(hash, ReleaseFeed.ChecksumFor(sums, ReleaseFeed.SetupName(new Version(1, 0, 1))));
+            Assert.Equal(new string('b', 64), ReleaseFeed.ChecksumFor(sums, "NoReturnGuardian-1.0.1-win-x64.zip"));
+            Assert.True(ReleaseFeed.ChecksumFor(sums, "broken.exe") == null, "a malformed line lists nothing");
+            Assert.True(ReleaseFeed.ChecksumFor(sums, "NoReturnGuardian-1.0.2-setup.exe") == null, "another version is not listed");
+            Assert.True(ReleaseFeed.ChecksumFor(null, "x") == null, "an empty list lists nothing");
+            Assert.Equal("https://github.com/Zane-0x5a/no-return-guardian/releases/download/v1.0.1/",
+                ReleaseFeed.AssetsFor(new Version(1, 0, 1)));
+
+            // 名字要和打包脚本写进 SHA256SUMS.txt 的一致，否则“更新”永远找不到安装程序。
+            string root = AppDomain.CurrentDomain.BaseDirectory;
+            while (root != null && !File.Exists(Path.Combine(root, "scripts", "package.ps1")))
+            {
+                root = Path.GetDirectoryName(root.TrimEnd('\\'));
+            }
+
+            Assert.True(root != null, "the tests run inside the repository");
+            string package = File.ReadAllText(Path.Combine(root, "scripts", "package.ps1"));
+            Assert.True(package.Contains("\"NoReturnGuardian-$version-setup.exe\"") && package.Contains("'SHA256SUMS.txt'"),
+                "package.ps1 names the installer and the checksum list the way ReleaseFeed expects");
+        }
+
+        private static void TestReleaseDownload()
+        {
+            // 用测试程序自己当“安装程序”：它带着文件版本号，下载后要和请求的版本对得上。
+            string exe = Assembly.GetExecutingAssembly().Location;
+            FileVersionInfo info = FileVersionInfo.GetVersionInfo(exe);
+            Version version = new Version(info.FileMajorPart, info.FileMinorPart, info.FileBuildPart);
+            Version mislabeled = new Version(version.Major, version.Minor, version.Build + 1);
+            byte[] setup = File.ReadAllBytes(exe);
+            string hash = FileTools.Sha256Bytes(setup);
+            var files = new Dictionary<string, byte[]>
+            {
+                { ReleaseFeed.ChecksumsName, Encoding.UTF8.GetBytes(
+                    hash + "  " + ReleaseFeed.SetupName(version) + "\n" + hash + "  " + ReleaseFeed.SetupName(mislabeled) + "\n") },
+                { ReleaseFeed.SetupName(version), setup },
+                { ReleaseFeed.SetupName(mislabeled), setup }
+            };
+            using (TestWorkspace workspace = new TestWorkspace())
+            using (LocalHttp server = new LocalHttp(files))
+            {
+                string folder = Path.Combine(workspace.Root, "update");
+                var progress = new List<int>();
+                string path = ReleaseFeed.DownloadSetup(server.Base, version, folder, version, progress.Add);
+                Assert.Equal(Path.Combine(folder, ReleaseFeed.SetupName(version)), path);
+                Assert.Equal(hash, FileTools.Sha256(path, false));
+                Assert.True(progress.Count > 1 && progress.Last() == 100, "the download reports its progress up to 100");
+                Assert.Equal(1, Directory.GetFiles(folder).Length);
+
+                Assert.Throws<InvalidDataException>(() => ReleaseFeed.DownloadSetup(server.Base, mislabeled, folder, version, null),
+                    "an installer carrying another version is refused");
+                Assert.Throws<FormatException>(() => ReleaseFeed.DownloadSetup(server.Base, new Version(9, 9, 9), folder, version, null),
+                    "a version the checksum list does not name is refused before downloading");
+
+                byte[] corrupted = (byte[])setup.Clone();
+                corrupted[corrupted.Length / 2] ^= 0xFF;
+                files[ReleaseFeed.SetupName(version)] = corrupted;
+                Assert.Throws<InvalidDataException>(() => ReleaseFeed.DownloadSetup(server.Base, version, folder, version, null),
+                    "an installer that does not match its checksum is refused");
+                Assert.Equal(0, Directory.GetFiles(folder).Length);
+
+                files.Remove(ReleaseFeed.ChecksumsName);
+                Assert.Throws<WebException>(() => ReleaseFeed.DownloadSetup(server.Base, version, folder, version, null),
+                    "a release without a checksum list is refused");
+                Assert.Equal(0, Directory.GetFiles(folder).Length);
+            }
+        }
+
         private static void TestMonitorTransientLoss()
         {
             using (TestWorkspace workspace = TestWorkspace.WithCompleteSave())
@@ -3617,8 +3696,87 @@ namespace NoReturnGuardian.Tests
         }
     }
 
+    /// <summary>只在 127.0.0.1 上应答 GET 的极简 HTTP 服务，代替 GitHub 的发布文件；没有的文件回 404。</summary>
+    internal sealed class LocalHttp : IDisposable
+    {
+        private readonly TcpListener _listener = new TcpListener(IPAddress.Loopback, 0);
+        private readonly Dictionary<string, byte[]> _files;
+        private readonly Thread _thread;
+
+        public LocalHttp(Dictionary<string, byte[]> files)
+        {
+            _files = files;
+            _listener.Start();
+            Base = "http://127.0.0.1:" + ((IPEndPoint)_listener.LocalEndpoint).Port + "/assets/";
+            _thread = new Thread(Serve) { IsBackground = true };
+            _thread.Start();
+        }
+
+        public string Base { get; private set; }
+
+        private void Serve()
+        {
+            try
+            {
+                while (true)
+                {
+                    using (TcpClient client = _listener.AcceptTcpClient())
+                    using (NetworkStream stream = client.GetStream())
+                    {
+                        var reader = new StreamReader(stream, Encoding.ASCII);
+                        string[] request = (reader.ReadLine() ?? string.Empty).Split(' ');
+                        while (!string.IsNullOrEmpty(reader.ReadLine()))
+                        {
+                        }
+
+                        byte[] body;
+                        string name = request.Length > 1 ? Uri.UnescapeDataString(request[1].Substring(request[1].LastIndexOf('/') + 1)) : string.Empty;
+                        bool found;
+                        lock (_files)
+                        {
+                            found = _files.TryGetValue(name, out body);
+                        }
+
+                        body = found ? body : new byte[0];
+                        byte[] head = Encoding.ASCII.GetBytes((found ? "HTTP/1.1 200 OK" : "HTTP/1.1 404 Not Found")
+                            + "\r\nContent-Length: " + body.Length + "\r\nConnection: close\r\n\r\n");
+                        stream.Write(head, 0, head.Length);
+                        stream.Write(body, 0, body.Length);
+                    }
+                }
+            }
+            catch (SocketException)
+            {
+                // 测试结束时 Stop() 让 AcceptTcpClient 抛出。
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
+        public void Dispose()
+        {
+            _listener.Stop();
+            _thread.Join(5000);
+        }
+    }
+
     internal static class Assert
     {
+        public static void Throws<T>(Action action, string message) where T : Exception
+        {
+            try
+            {
+                action();
+            }
+            catch (T)
+            {
+                return;
+            }
+
+            throw new InvalidOperationException(message + " (no " + typeof(T).Name + ")");
+        }
+
         public static void True(bool value, string message)
         {
             if (!value)

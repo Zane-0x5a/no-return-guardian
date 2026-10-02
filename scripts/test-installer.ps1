@@ -5,7 +5,8 @@
     [switch]$AllowLocal
 )
 
-# 安装程序冒烟测试：静默安装到临时目录，在守护器运行时升级，模拟不响应 --exit 的旧守护器看安装程序拒绝，
+# 安装程序冒烟测试：静默安装到临时目录，在守护器运行时升级，再像守护器的“更新”那样带 /RELAUNCH 升级、看它被重新打开，
+# 模拟不响应 --exit 的旧守护器看安装程序拒绝，
 # 最后在守护器运行时卸载；核对文件、卸载登记、开机启动项和保留的玩家数据。
 # 守护器读写的数据目录无法重定向，所以默认只在 CI 的 Windows 虚拟机里跑；有守护器在运行时一律拒绝。
 $ErrorActionPreference = 'Stop'
@@ -41,8 +42,8 @@ function Assert-That([bool]$Condition, [string]$Message) {
     Write-Output "  ok  $Message"
 }
 
-function Invoke-Setup([string]$Name) {
-    $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', "/DIR=`"$app`"", "/LOG=`"$(Join-Path $root "$Name.log")`"")
+function Invoke-Setup([string]$Name, [string[]]$Extra = @()) {
+    $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', "/DIR=`"$app`"", "/LOG=`"$(Join-Path $root "$Name.log")`"") + $Extra
     (Start-Process -FilePath $Setup -ArgumentList $arguments -Wait -PassThru).ExitCode
 }
 
@@ -56,6 +57,10 @@ function Start-Guardian {
     Start-Process -FilePath (Join-Path $app 'NoReturnGuardian.exe') -ArgumentList '--minimized' | Out-Null
     for ($index = 0; $index -lt 100 -and -not (Test-GuardianRunning); $index++) { Start-Sleep -Milliseconds 200 }
     Assert-That (Test-GuardianRunning) 'the installed Guardian starts'
+}
+
+function Get-InstalledGuardian {
+    @(Get-Process -Name NoReturnGuardian -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$app*" })
 }
 
 function Wait-Until([scriptblock]$Condition, [int]$Seconds) {
@@ -96,6 +101,16 @@ try {
     Assert-That ($code -eq 0) "an upgrade over a running Guardian succeeds (exit $code)"
     Assert-That (-not (Test-GuardianRunning)) 'the upgrade asked the running Guardian to exit'
     Assert-That (-not (Test-Path -LiteralPath (Join-Path $app 'native-recovery\stale.txt'))) 'the upgrade replaces the native components as a whole'
+
+    # 守护器自己的“更新”：/RELAUNCH 让安装程序装好后重新打开它，然后用 --exit 请它退出，接着测下一项。
+    Start-Guardian
+    $before = @(Get-InstalledGuardian | ForEach-Object { $_.Id })
+    $code = Invoke-Setup 'relaunch' @('/RELAUNCH')
+    Assert-That ($code -eq 0) "an update started by Guardian succeeds (exit $code)"
+    Assert-That (Wait-Until { @(Get-InstalledGuardian | Where-Object { $before -notcontains $_.Id }).Count -eq 1 } 30) 'the update reopens Guardian from the install'
+    Assert-That (Wait-Until { Test-GuardianRunning } 30) 'the reopened Guardian is running'
+    Start-Process -FilePath (Join-Path $app 'NoReturnGuardian.exe') -ArgumentList '--exit' -Wait
+    Assert-That (Wait-Until { -not (Test-GuardianRunning) } 30) 'the reopened Guardian exits on request'
 
     # 不响应 --exit 的旧守护器：安装程序等不到它退出，就拒绝安装，什么也不改。
     $holder = [Threading.Mutex]::new($true, $mutexName)

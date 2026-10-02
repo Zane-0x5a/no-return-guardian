@@ -70,6 +70,8 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; 守护器的“更新”带 /RELAUNCH 静默运行安装程序：装好后在托盘里重新打开它，身份和玩家原来的一样（不提权）。
+Filename: "{app}\{#AppExe}"; Parameters: "--minimized"; Flags: nowait runasoriginaluser; Check: RelaunchRequested
 
 [UninstallDelete]
 ; Python 运行时在安装目录里生成的 __pycache__。
@@ -112,6 +114,16 @@ begin
   Result := not GuardianRunning;
 end;
 
+function RelaunchRequested: Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/RELAUNCH') = 0 then
+      Result := True;
+end;
+
 function WebView2Installed: Boolean;
 var
   Version: String;
@@ -141,7 +153,7 @@ begin
   Result := '';
   if not GuardianRunning then
     Exit;
-  if GameRunning and (SuppressibleMsgBox('游戏正在运行。安装时守护器会先退出，装好后再打开，这段时间里不会自动保存出发前的兵营。'
+  if GameRunning and (SuppressibleMsgBox('游戏正在运行。安装期间守护器会暂时退出，出发自动保存也随之暂停，装好后再打开。'
       + #13#10#13#10 + '现在继续吗？', mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDYES) <> IDYES) then
   begin
     Result := '已取消安装。可以等这局打完、退出游戏后再安装。';

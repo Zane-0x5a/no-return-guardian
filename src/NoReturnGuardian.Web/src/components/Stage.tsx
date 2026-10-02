@@ -9,12 +9,27 @@ interface StageProps {
   onLaunch: () => void;
   onChooseProfile: () => void;
   onWarm: () => void;
-  onOpenRelease: () => void;
+  onUpdate: () => void;
+}
+
+function updateLabel({ available, installable, phase, progress }: ViewState['version']) {
+  if (!installable) return `新版本 ${available}`;
+  switch (phase) {
+    case 'downloading':
+      return `正在下载 ${available} · ${progress}%`;
+    case 'installing':
+      return `正在安装 ${available}`;
+    case 'failed':
+      return `没能更新到 ${available}，点这里重试`;
+    default:
+      return `更新到 ${available}`;
+  }
 }
 
 // 左侧舞台：只回答三件事——现在守护着吗、最近一次保护在几点、下一步按哪里。
-export function Stage({ state, onProtect, onUndo, onLaunch, onChooseProfile, onWarm, onOpenRelease }: StageProps) {
-  const { hotkeys } = state;
+export function Stage({ state, onProtect, onUndo, onLaunch, onChooseProfile, onWarm, onUpdate }: StageProps) {
+  const { hotkeys, version } = state;
+  const updating = version.phase === 'downloading' || version.phase === 'installing';
   return (
     <section className="stage">
       <header className="wordmark" aria-label="赴死之旅守护器">
@@ -22,9 +37,9 @@ export function Stage({ state, onProtect, onUndo, onLaunch, onChooseProfile, onW
         <span className="wordmark-rule" />
         <span>GUARDIAN</span>
       </header>
-      {state.version.available && (
-        <Button variant="ghost" className="update-note" icon={<Icon.download />} title="打开下载页" onClick={onOpenRelease}>
-          新版本 {state.version.available}
+      {version.available && (
+        <Button variant="ghost" className="update-note" icon={<Icon.download />} disabled={updating} onClick={onUpdate}>
+          {updateLabel(version)}
         </Button>
       )}
 

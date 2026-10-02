@@ -15,6 +15,7 @@ interface SettingsProps {
   panelTransparency: number;
   onPanelTransparency: (value: number) => void;
   onCheckUpdates: (value: boolean) => void;
+  onUpdate: () => void;
   onOpenRelease: () => void;
 }
 
@@ -24,7 +25,7 @@ function shortAccount(name: string) {
 
 export function Settings({
   state, onAutoProtect, onStartup, onChooseProfile, onOpenSaves, onOpenBackups, onAutoCleanup, onShowUndo,
-  panelTransparency, onPanelTransparency, onCheckUpdates, onOpenRelease,
+  panelTransparency, onPanelTransparency, onCheckUpdates, onUpdate, onOpenRelease,
 }: SettingsProps) {
   const { settings, library, profile, version } = state;
   return (
@@ -97,7 +98,7 @@ export function Settings({
       <div className="setting">
         <div className="setting-text">
           <span className="setting-name">检查更新</span>
-          <span className="setting-hint">每天向 GitHub 查一次，只提示，不自动下载</span>
+          <span className="setting-hint">每天查一次 GitHub 上的新版本</span>
         </div>
         <Switch label="检查更新" checked={settings.checkUpdates} onChange={onCheckUpdates} />
       </div>
@@ -110,6 +111,15 @@ export function Settings({
         </div>
         {version.available && (
           <div className="setting-buttons">
+            {version.installable && (
+              <Button
+                variant="line"
+                disabled={version.phase === 'downloading' || version.phase === 'installing'}
+                onClick={onUpdate}
+              >
+                更新
+              </Button>
+            )}
             <Button variant="line" onClick={onOpenRelease}>下载页</Button>
           </div>
         )}

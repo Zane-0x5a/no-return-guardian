@@ -205,6 +205,11 @@ button,
   height: 16px;
 }
 
+/* 下载、安装进行中：进度照常可读，只是不能再点。 */
+.btn.update-note:disabled {
+  opacity: 1;
+}
+
 .status {
   margin-top: auto;
   padding-top: 40px;

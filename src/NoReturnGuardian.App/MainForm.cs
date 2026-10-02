@@ -53,7 +53,7 @@ namespace NoReturnGuardian
         private DepartureRecorder _recorder;
         private NativeRecoveryCoordinator _native;
         private AutoCleanup _cleanup;
-        private UpdateCheck _updates;
+        private Updater _updates;
         private FileRestore _files;
         private GuardianTray _tray;
         private MonitorStatus _lastMonitorStatus;
@@ -115,7 +115,7 @@ namespace NoReturnGuardian
             _recorder = new DepartureRecorder(this, _render == null);
             _native = new NativeRecoveryCoordinator(this, _recorder);
             _cleanup = new AutoCleanup(this, PinnedSnapshots, _render == null);
-            _updates = new UpdateCheck(this, _render == null);
+            _updates = new Updater(this, _gameProbe, ShowFromTray, _render == null);
 
             _pollTimer = new Timer { Interval = _settings.PollIntervalMs };
             _pollTimer.Tick += (sender, args) => PollNow();
@@ -494,7 +494,7 @@ namespace NoReturnGuardian
                 RecoverHotkey = _recoveryHotkeyRegistered ? RecoveryHotkeyName : null,
                 RestartHotkey = _restartHotkeyRegistered ? RestartHotkeyName : null,
                 HasDeparture = id => NativeRecovery.HasDeparture(_settings.StoragePath, id),
-                UpdateAvailable = _updates.Available
+                Updates = _updates
             }));
             if (json == _lastStateJson)
             {
@@ -597,6 +597,7 @@ namespace NoReturnGuardian
 
                     PublishState();
                     _files.OfferInterrupted(_pageReady, _warmRestore.HasActiveOperation);
+                    _updates.PageReady();
                     break;
                 case "protect":
                     HandleProtectNow();
@@ -637,6 +638,9 @@ namespace NoReturnGuardian
                     _settings.CheckForUpdates = message.TryGetValue("value", out value) && Equals(value, true);
                     _settingsStore.Save(_settings);
                     PublishState();
+                    break;
+                case "update":
+                    _updates.Install();
                     break;
                 case "open-release":
                     _updates.OpenPage();

@@ -54,8 +54,7 @@ namespace NoReturnGuardian
             public string RecoverHotkey;
             public string RestartHotkey;
             public Func<string, bool> HasDeparture;
-            /// <summary>GitHub 上比当前更新的正式版；没有或玩家关了检查更新时为空。</summary>
-            public Version UpdateAvailable;
+            public Updater Updates;
         }
 
         /// <summary>
@@ -71,6 +70,7 @@ namespace NoReturnGuardian
             bool profileFound = !string.IsNullOrWhiteSpace(settings.ProfilePath);
             int restorable = records.Count(SnapshotPolicy.IsRedeployablePreparation);
             bool hasProtected = status != null && !string.IsNullOrWhiteSpace(status.LastProtectedSnapshotId);
+            Version available = input.Updates.Available;
             Status described = DescribeStatus(new StatusInput
             {
                 ProfileFound = profileFound,
@@ -158,8 +158,11 @@ namespace NoReturnGuardian
                     "checkUpdates", settings.CheckForUpdates,
                     "profilePath", settings.ProfilePath ?? ""),
                 "version", Map(
-                    "current", ReleaseFeed.Display(UpdateCheck.Current),
-                    "available", input.UpdateAvailable == null ? null : ReleaseFeed.Display(input.UpdateAvailable)),
+                    "current", ReleaseFeed.Display(Updater.Current),
+                    "available", available == null ? null : ReleaseFeed.Display(available),
+                    "installable", input.Updates.Installable,
+                    "phase", input.Updates.Phase.ToString().ToLowerInvariant(),
+                    "progress", input.Updates.Progress),
                 "library", Map(
                     "count", records.Count,
                     "size", FormatBytes(bytes),
