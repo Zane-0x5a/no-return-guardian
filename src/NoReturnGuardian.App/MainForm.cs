@@ -61,6 +61,7 @@ namespace NoReturnGuardian
         private bool _polling;
         private bool _trayHintShown;
         private bool _pageReady;
+        private bool _shellFailed;
         private bool _renderStarted;
         private string _lastStateJson;
         private string _focusId;
@@ -395,12 +396,27 @@ namespace NoReturnGuardian
             }
 
             DiagnosticLog.Write("webview2", reason);
+            _shellFailed = true;
+            bool shown = Visible;
+            Hide();
+            // 在托盘里启动（开机自启）时不弹模态框：既不抢正在用的程序的焦点，也不挡安装程序的 --exit。
+            if (shown)
+            {
+                ShowShellFailure();
+            }
+            else if (_tray != null)
+            {
+                _tray.Balloon(8000, "界面没能打开", "需要安装或修复 Microsoft Edge WebView2 运行时。守护器仍在托盘运行，游戏内快捷键可用。", ToolTipIcon.Warning);
+            }
+        }
+
+        private static void ShowShellFailure()
+        {
             MessageBox.Show(
                 "界面组件 WebView2 无法启动，可能需要安装或修复 Microsoft Edge WebView2 运行时。\n\n守护器会继续在托盘运行，游戏内快捷键仍可使用。",
                 "赴死之旅守护器",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
-            Hide();
         }
 
         // ---------- 状态发布与提示（IGuardianHost） ----------
@@ -1150,6 +1166,13 @@ namespace NoReturnGuardian
         {
             if (_render != null)
             {
+                return;
+            }
+
+            if (_shellFailed)
+            {
+                // 界面起不来，窗口打开也是空白；玩家要打开时才说明原因。
+                ShowShellFailure();
                 return;
             }
 
