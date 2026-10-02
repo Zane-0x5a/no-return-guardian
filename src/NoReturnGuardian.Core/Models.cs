@@ -123,12 +123,10 @@ namespace NoReturnGuardian.Core
         public string LastRestoredSnapshotId { get; set; }
         /// <summary>How much of the shader field shows through the list panel, 0 (opaque) to 100 (frosting only).</summary>
         public int PanelTransparency { get; set; }
-        /// <summary>Ask GitHub at most once a day whether a newer release exists, and offer it in the window and the tray.</summary>
+        /// <summary>Ask GitHub for the newest release after every start and every few hours, and offer a newer one in the window and the tray.</summary>
         public bool CheckForUpdates { get; set; }
         /// <summary>The newest published release seen by the last successful check, as major.minor.patch.</summary>
         public string LatestRelease { get; set; }
-        /// <summary>When the last check succeeded (UTC, round-trip format).</summary>
-        public string LastUpdateCheckUtc { get; set; }
         /// <summary>The release the tray has already announced, so each version is announced once.</summary>
         public string AnnouncedRelease { get; set; }
         /// <summary>The release whose installer Guardian started; the next start tells the player whether it took.</summary>

@@ -2068,7 +2068,8 @@ namespace NoReturnGuardian.Tests
             using (TestWorkspace workspace = new TestWorkspace())
             {
                 string path = Path.Combine(workspace.Root, "settings.json");
-                File.WriteAllText(path, "{\"AutoCleanup\":true}");
+                // 1.0.0 还记着上次检查的时间；现在不用了，读到也照常加载。
+                File.WriteAllText(path, "{\"AutoCleanup\":true,\"LastUpdateCheckUtc\":\"2026-10-02T01:42:19.0000000Z\"}");
                 SettingsStore store = new SettingsStore(path);
                 GuardianSettings loaded = store.Load();
                 Assert.True(loaded.CheckForUpdates && loaded.AutoCleanup, "a settings file from before update checks keeps them on");

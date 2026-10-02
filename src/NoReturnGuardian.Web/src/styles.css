@@ -211,6 +211,7 @@ button,
   opacity: 1;
 }
 
+/* 舞台只在字标下面留白：状态、最近保护、按钮和快捷键成一组落到底边，和右边面板的底边对齐。 */
 .status {
   margin-top: auto;
   padding-top: 40px;
@@ -292,6 +293,10 @@ button,
   margin-top: 40px;
 }
 
+.stage-secondary:empty {
+  display: none;
+}
+
 .stage-secondary {
   display: flex;
   align-items: center;
@@ -305,7 +310,6 @@ button,
   flex-wrap: wrap;
   gap: 10px 26px;
   min-height: 74px;
-  margin: auto 0 0;
   padding-top: 30px;
 }
 

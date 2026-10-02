@@ -3,7 +3,6 @@ using NoReturnGuardian.Core;
 using System;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Threading.Tasks;
@@ -20,15 +19,16 @@ namespace NoReturnGuardian
     }
 
     /// <summary>
-    /// 更新：游戏没运行时，每天最多问一次 GitHub 最新的正式版；有新版本时窗口里显示，托盘气泡每个版本只说一次。
+    /// 更新：守护器每次启动后问一次 GitHub 最新的正式版，之后每隔几小时再问；有新版本时窗口里显示，
+    /// 托盘气泡等游戏没运行时再说，每个版本只说一次。
     /// 玩家点“更新”后，下载这一版的安装程序，核对发布里的校验和与版本号，在游戏没运行时运行它：安装程序像平常升级一样
     /// 请守护器退出，装好后再打开它。便携版和开发构建不在安装程序记下的位置，点“更新”打开下载页。
     /// </summary>
     internal sealed class Updater
     {
         private static readonly TimeSpan FirstDelay = TimeSpan.FromMinutes(1);
-        private static readonly TimeSpan Interval = TimeSpan.FromHours(24);
-        private static readonly TimeSpan Retry = TimeSpan.FromHours(1);
+        private static readonly TimeSpan Interval = TimeSpan.FromHours(6);
+        private static readonly TimeSpan Retry = TimeSpan.FromMinutes(15);
 
         // 与 installer\NoReturnGuardian.iss 的 AppId 相同。
         private const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\{295032DA-7333-4CA6-B405-D53B639C79A9}_is1";
@@ -40,8 +40,9 @@ namespace NoReturnGuardian
         private readonly IGameProcessProbe _game;
         private readonly Action _showWindow;
         private readonly bool _live;
-        private readonly DateTime _started = DateTime.UtcNow;
-        private DateTime _lastAttempt = DateTime.MinValue;
+        // 按运行时长计时：调系统时间不影响什么时候查。
+        private readonly Stopwatch _uptime = Stopwatch.StartNew();
+        private TimeSpan _nextCheck = FirstDelay;
         private bool _checking;
         private bool _swept;
         // 下载并核对过的安装程序；文件名带版本号，和要装的版本对得上才直接用。
@@ -75,11 +76,11 @@ namespace NoReturnGuardian
         /// <summary>下载进度，0 到 100。</summary>
         public int Progress { get; private set; }
 
-        /// <summary>随状态轮询调用：到时间就在后台检查；有还没说过的新版本，就用气泡说一次。</summary>
+        /// <summary>随状态轮询调用：到时间就在后台检查；有还没说过的新版本，等游戏没运行时用气泡说一次。</summary>
         public void Poll(bool gameRunning)
         {
-            DateTime now = DateTime.UtcNow;
-            if (!_live || now - _started < FirstDelay)
+            TimeSpan now = _uptime.Elapsed;
+            if (!_live || now < FirstDelay)
             {
                 return;
             }
@@ -91,19 +92,25 @@ namespace NoReturnGuardian
                 Sweep();
             }
 
-            if (gameRunning || !_host.Settings.CheckForUpdates)
+            if (!_host.Settings.CheckForUpdates)
             {
                 return;
             }
 
-            Announce();
-            if (_checking || now - _lastAttempt < Retry || !Due(now))
+            // 检查只是一次请求，玩的时候照常进行；气泡会盖在游戏上，等游戏退出后再说。
+            if (!gameRunning)
+            {
+                Announce();
+            }
+
+            if (_checking || now < _nextCheck)
             {
                 return;
             }
 
             _checking = true;
-            _lastAttempt = now;
+            // 失败时过一会儿再试；成功后 Checked 把下一次推到 Interval 之后。
+            _nextCheck = now + Retry;
             Task.Run(() => ReleaseFeed.FetchLatest(Current)).ContinueWith(task => _host.RunOnUiThread(() => Checked(task)));
         }
 
@@ -183,19 +190,6 @@ namespace NoReturnGuardian
             }
         }
 
-        private bool Due(DateTime now)
-        {
-            DateTime last;
-            if (!DateTime.TryParse(_host.Settings.LastUpdateCheckUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out last))
-            {
-                return true;
-            }
-
-            last = last.ToUniversalTime();
-            // 系统时间往回调过时，记下的时间会在未来；照样当作该查了。
-            return last > now || now - last >= Interval;
-        }
-
         private void Announce()
         {
             Version available = Available;
@@ -230,8 +224,8 @@ namespace NoReturnGuardian
                 return;
             }
 
+            _nextCheck = _uptime.Elapsed + Interval;
             _host.Settings.LatestRelease = task.Result == null ? null : ReleaseFeed.Display(task.Result);
-            _host.Settings.LastUpdateCheckUtc = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
             _host.SaveSettings();
             _host.PublishState();
         }

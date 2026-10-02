@@ -98,7 +98,7 @@ export function Settings({
       <div className="setting">
         <div className="setting-text">
           <span className="setting-name">检查更新</span>
-          <span className="setting-hint">每天查一次 GitHub 上的新版本</span>
+          <span className="setting-hint">启动时和每 6 小时查一次 GitHub 上的新版本</span>
         </div>
         <Switch label="检查更新" checked={settings.checkUpdates} onChange={onCheckUpdates} />
       </div>
