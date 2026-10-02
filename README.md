@@ -21,18 +21,15 @@
 
 ## 能做什么
 
-| | |
-|---|---|
-| **恢复兵营** &nbsp;`Ctrl+Alt+F9` | 回到出发前的兵营，资源、装备和路线都和当时一样，可以重新准备。 |
-| **重开战斗** &nbsp;`Ctrl+Alt+F10` | 回到出发前，再按你选过的路线自动出发，直接重打同一场。 |
-| **出发自动保存** | 你从路线板出发的那一刻，自动存下出发前的战备。 |
+- **恢复兵营** `Ctrl+Alt+F9`：回到出发前的兵营，资源、装备和路线都和当时一样，可以重新准备。
+- **重开战斗** `Ctrl+Alt+F10`：回到出发前，再按你选过的路线自动出发，直接重打同一场。
+- **出发自动保存**：你从路线板出发的那一刻，自动存下出发前的战备。
 
 全程都在游戏里完成，不用退出游戏。
 
 ## 安装
 
-1. 从 [Releases](https://github.com/Zane-0x5a/no-return-guardian/releases/latest) 下载 `NoReturnGuardian-<版本>-setup.exe` 并运行，不需要管理员权限。
-   想免安装就下载 `NoReturnGuardian-<版本>-win-x64.zip`，解压后运行 `NoReturnGuardian.exe`。
+1. 从 [Releases](https://github.com/Zane-0x5a/no-return-guardian/releases/latest) 下载 `NoReturnGuardian-<版本>-setup.exe` 并运行，不需要管理员权限。想免安装就下载 `NoReturnGuardian-<版本>-win-x64.zip`，解压后运行 `NoReturnGuardian.exe`。
 2. 如果 Windows 提示“已保护你的电脑”，点“更多信息”→“仍要运行”。
 
 需要 64 位 Windows 10 或 11。Windows 10 上缺少 WebView2 运行时的话，安装程序会给出下载地址。
@@ -42,8 +39,7 @@
 ## 使用
 
 1. 打开守护器，它会待在托盘里。启动游戏，进入赴死之旅。
-2. 在兵营准备好后，从路线板出发。守护器会存下出发前的战备，托盘提示“已在出发时保存战备”。
-   想在兵营里另存一份，点窗口里的“保护当前战备”。
+2. 在兵营准备好后，从路线板出发。守护器会存下出发前的战备，托盘提示“已在出发时保存战备”。想在兵营里另存一份，点窗口里的“保护当前战备”。
 3. 战死后停在结算页时：
    - 按 `Ctrl+Alt+F9`：回到兵营；
    - 按 `Ctrl+Alt+F10`：重开这场战斗。
@@ -53,6 +49,7 @@
 恢复时让游戏留在前台，通常半分钟内完成。想回到更早的战备，就在窗口右侧的清单里选中它，点“恢复兵营”或“重开战斗”。
 
 > 托盘图标里那扇小门是香槟色时，现在就可以保护战备；变成石榴红，说明征途可能已经结束。
+>
 > 窗口里可以用键盘操作：↑↓ 选择，Enter 恢复，Delete 删除，Esc 关闭面板。
 
 ## 常见问题
@@ -67,8 +64,7 @@
 在 `%LOCALAPPDATA%\NoReturnGuardian`。升级和卸载都会保留它们，不需要时直接删除这个文件夹。
 
 **遇到问题怎么反馈？**<br>
-提交 [Issue](https://github.com/Zane-0x5a/no-return-guardian/issues)，附上 `%LOCALAPPDATA%\NoReturnGuardian\guardian.log`，以及快照库 `native-recovery-logs` 文件夹里出问题那次的 `recovery-*` 文件。
-日志里的存档路径带有平台账号 ID，公开前可以把它替换掉。
+提交 [Issue](https://github.com/Zane-0x5a/no-return-guardian/issues)，附上 `%LOCALAPPDATA%\NoReturnGuardian\guardian.log`，以及快照库 `native-recovery-logs` 文件夹里出问题那次的 `recovery-*` 文件。日志里的存档路径带有平台账号 ID，公开前可以把它替换掉。
 
 ---
 
