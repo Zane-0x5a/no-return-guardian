@@ -7,17 +7,11 @@ import { Field } from './components/Field';
 import { Settings } from './components/Settings';
 import { type Sheet, SheetLayer } from './components/Sheets';
 import { Stage } from './components/Stage';
-import type { Command, HostMessage, NativeAction, SnapshotView, Tone, ViewState } from './types';
+import type { Command, HostMessage, NativeAction, Notice, SnapshotView, Tone, ViewState } from './types';
 
 // 恢复前快照平时用不到，默认不进清单；“撤销最近恢复”照常可用。
 function listed(state: ViewState): SnapshotView[] {
   return state.settings.showUndo ? state.snapshots : state.snapshots.filter((item) => !item.preRestore);
-}
-
-interface Toast {
-  id: number;
-  text: string;
-  tone: Tone;
 }
 
 export function App() {
@@ -26,7 +20,7 @@ export function App() {
   const [fresh, setFresh] = useState<string | null>(null);
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [view, setView] = useState<'ledger' | 'settings'>('ledger');
-  const [notice, setNotice] = useState<Toast | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const focusNonce = useRef(0);
   const sheetRef = useRef<Sheet | null>(null);
   sheetRef.current = sheet;
@@ -169,6 +163,7 @@ export function App() {
 
       <Stage
         state={state}
+        notice={notice}
         onProtect={() => setSheet({ kind: 'protect' })}
         onUndo={() => setSheet({ kind: 'undo' })}
         onLaunch={() => send({ name: 'launch' })}
@@ -236,14 +231,6 @@ export function App() {
           )}
         </div>
       </section>
-
-      <div className="toasts" aria-live="polite">
-        {notice && (
-          <div key={notice.id} className={`toast toast-${notice.tone}`}>
-            {notice.text}
-          </div>
-        )}
-      </div>
 
       {sheet && (
         <SheetLayer

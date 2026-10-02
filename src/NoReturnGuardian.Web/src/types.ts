@@ -93,6 +93,13 @@ export type HostMessage =
 
 export type Tone = 'neutral' | 'signal' | 'danger';
 
+/** 舞台上的一条提示。 */
+export interface Notice {
+  id: number;
+  text: string;
+  tone: Tone;
+}
+
 export type HostSheet =
   | { kind: 'interrupted' }
   /** 开启自动清理前的确认：现在就要删掉的旧快照 */

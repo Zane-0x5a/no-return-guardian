@@ -112,16 +112,14 @@ p {
 /* ---------- 布局 ---------- */
 
 .app {
-  --stage: max(360px, 41%);
   position: relative;
   display: grid;
-  grid-template-columns: var(--stage) 1fr;
+  grid-template-columns: minmax(360px, 41%) 1fr;
   height: 100%;
 }
 
 .stage,
-.panel,
-.toasts {
+.panel {
   position: relative;
   z-index: 1;
 }
@@ -211,10 +209,28 @@ button,
   opacity: 1;
 }
 
-/* 舞台只在字标下面留白：状态、最近保护、按钮和快捷键成一组落到底边，和右边面板的底边对齐。 */
-.status {
+/* 舞台从上到下是三段：字标；提示条的空位、状态和最近保护；按钮和它下面那一块。
+   后两段之前各有一段留白：状态居中，按钮坐在底边，和右边面板的底边对齐。 */
+
+/* 提示条的常驻位置：大字上面留一条提示条高的空位，提示只出现在这里，不压任何东西。
+   长提示折成几行时往上长，不推动下面的大字。 */
+.notice {
+  position: relative;
+  flex: none;
+  height: 60px;
   margin-top: auto;
-  padding-top: 40px;
+}
+
+.notice .toast {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: max-content;
+  max-width: 100%;
+}
+
+.status {
+  padding-top: 14px;
 }
 
 .status-headline {
@@ -289,12 +305,14 @@ button,
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 14px;
-  margin-top: 40px;
+  margin-top: auto;
+  padding-top: 40px;
 }
 
-.stage-secondary:empty {
-  display: none;
+/* 按两行快捷键的高度固定，次要操作只有一行，也占这么高。 */
+.stage-foot {
+  min-height: 54px;
+  margin-top: 16px;
 }
 
 .stage-secondary {
@@ -304,13 +322,11 @@ button,
   margin-left: -14px;
 }
 
-/* 至少一条提示条高，快捷键和提示条的中线对齐。 */
 .hotkeys {
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px 26px;
-  min-height: 74px;
-  padding-top: 30px;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
 }
 
 .hotkeys div {
@@ -995,25 +1011,6 @@ kbd {
 }
 
 /* ---------- 提示条 ---------- */
-
-/* 提示占舞台底部快捷键那一行（.hotkeys 一直留着这一行），期间快捷键淡出。
-   大字和按钮会随窗口高度上下移动，这一行不会，所以提示压不到它们；宽度也不越过右边的面板。 */
-.toasts {
-  position: fixed;
-  left: 52px;
-  bottom: 36px;
-  max-width: calc(var(--stage) - 72px);
-  z-index: 5;
-  pointer-events: none;
-}
-
-.hotkeys > div {
-  transition: opacity 0.4s var(--ease);
-}
-
-.app:has(.toast) .hotkeys > div {
-  opacity: 0;
-}
 
 .toast {
   padding: 11px 20px;

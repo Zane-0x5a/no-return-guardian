@@ -1,9 +1,10 @@
-import type { ViewState } from '../types';
+import type { Notice, ViewState } from '../types';
 import { Button, Keys } from './Controls';
 import { Icon } from './Icons';
 
 interface StageProps {
   state: ViewState;
+  notice: Notice | null;
   onProtect: () => void;
   onUndo: () => void;
   onLaunch: () => void;
@@ -27,8 +28,9 @@ function updateLabel({ available, installable, phase, progress }: ViewState['ver
 }
 
 // 左侧舞台：只回答三件事——现在守护着吗、最近一次保护在几点、下一步按哪里。
-export function Stage({ state, onProtect, onUndo, onLaunch, onChooseProfile, onWarm, onUpdate }: StageProps) {
+export function Stage({ state, notice, onProtect, onUndo, onLaunch, onChooseProfile, onWarm, onUpdate }: StageProps) {
   const { hotkeys, version } = state;
+  const { warm, undo, launch } = state.actions;
   const updating = version.phase === 'downloading' || version.phase === 'installing';
   return (
     <section className="stage">
@@ -42,6 +44,15 @@ export function Stage({ state, onProtect, onUndo, onLaunch, onChooseProfile, onW
           {updateLabel(version)}
         </Button>
       )}
+
+      {/* 提示条的常驻位置：大字上面一直留着这一条，提示只出现在这里。 */}
+      <div className="notice" aria-live="polite">
+        {notice && (
+          <div key={notice.id} className={`toast toast-${notice.tone}`}>
+            {notice.text}
+          </div>
+        )}
+      </div>
 
       <div className={`status status-${state.mode}`} key={state.headline}>
         <h1 className={`status-headline${state.headline.length > 4 ? ' long' : ''}`}>{state.headline}</h1>
@@ -67,40 +78,45 @@ export function Stage({ state, onProtect, onUndo, onLaunch, onChooseProfile, onW
             选择存档目录
           </Button>
         )}
-        <div className="stage-secondary">
-          {state.actions.warm && (
-            <Button variant="ghost" icon={<Icon.restore />} onClick={onWarm}>
-              处理未完成的恢复
-            </Button>
+        {/* 按钮下面这一块高度固定：游戏运行时是快捷键，没运行时是撤销、启动游戏这些次要操作，按钮的位置不随状态变。 */}
+        <div className="stage-foot">
+          {(warm || undo || launch) && (
+            <div className="stage-secondary">
+              {warm && (
+                <Button variant="ghost" icon={<Icon.restore />} onClick={onWarm}>
+                  处理未完成的恢复
+                </Button>
+              )}
+              {undo && (
+                <Button variant="ghost" icon={<Icon.undo />} onClick={onUndo}>
+                  撤销最近恢复
+                </Button>
+              )}
+              {launch && (
+                <Button variant="ghost" icon={<Icon.play />} onClick={onLaunch}>
+                  启动游戏
+                </Button>
+              )}
+            </div>
           )}
-          {state.actions.undo && (
-            <Button variant="ghost" icon={<Icon.undo />} onClick={onUndo}>
-              撤销最近恢复
-            </Button>
-          )}
-          {state.actions.launch && (
-            <Button variant="ghost" icon={<Icon.play />} onClick={onLaunch}>
-              启动游戏
-            </Button>
+          {(hotkeys.recover || hotkeys.restart) && (
+            <dl className="hotkeys">
+              {hotkeys.recover && (
+                <div>
+                  <dt><Keys combo={hotkeys.recover} /></dt>
+                  <dd>恢复兵营</dd>
+                </div>
+              )}
+              {hotkeys.restart && (
+                <div>
+                  <dt><Keys combo={hotkeys.restart} /></dt>
+                  <dd>重开战斗</dd>
+                </div>
+              )}
+            </dl>
           )}
         </div>
       </div>
-
-      {/* 底边这一行留给快捷键和提示条，没有快捷键时也空着。 */}
-      <dl className="hotkeys">
-        {hotkeys.recover && (
-          <div>
-            <dt><Keys combo={hotkeys.recover} /></dt>
-            <dd>恢复兵营</dd>
-          </div>
-        )}
-        {hotkeys.restart && (
-          <div>
-            <dt><Keys combo={hotkeys.restart} /></dt>
-            <dd>重开战斗</dd>
-          </div>
-        )}
-      </dl>
     </section>
   );
 }

@@ -20,9 +20,12 @@
     old.textContent = '.btn > span, .panel-back span { translate: none; }';
     document.head.appendChild(old);
   }
-  if (view === 'main' && !q('.hotkeys div')) {
-    // 截图模式不注册快捷键，说明那一行是空的；按 Stage 的结构填一份。
-    q('.hotkeys').innerHTML = [['Ctrl', 'Alt', 'F9', '结算页恢复'], ['Ctrl', 'Alt', 'F10', '重开遭遇']].map(function (row) {
+  if (view === 'main' && !q('.hotkeys')) {
+    // 截图模式不注册快捷键，说明不显示；按 Stage 的结构放一份。
+    var legend = document.createElement('dl');
+    legend.className = 'hotkeys';
+    q('.stage-foot').appendChild(legend);
+    legend.innerHTML = [['Ctrl', 'Alt', 'F9', '结算页恢复'], ['Ctrl', 'Alt', 'F10', '重开遭遇']].map(function (row) {
       return '<div><dt><span class="keys"><kbd>' + row.slice(0, 3).join('</kbd><kbd>') + '</kbd></span></dt><dd>' + row[3] + '</dd></div>';
     }).join('');
   }
@@ -38,7 +41,7 @@
     var toast = document.createElement('div');
     toast.className = 'toast toast-signal';
     toast.textContent = '战备已保护';
-    q('.toasts').appendChild(toast);
+    q('.notice').appendChild(toast);
   }
   setTimeout(function () {
     var items = [];
