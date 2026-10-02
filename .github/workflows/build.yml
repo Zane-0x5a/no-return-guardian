@@ -1,0 +1,78 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: src/NoReturnGuardian.Web/package-lock.json
+
+      # 与随包的嵌入式 Python 同版本。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13.7'
+
+      - name: Cache pinned downloads
+        uses: actions/cache@v4
+        with:
+          path: build-cache/*.zip
+          key: pinned-${{ hashFiles('scripts/build-tools.ps1') }}
+
+      - name: Cache Frida wheel
+        uses: actions/cache@v4
+        with:
+          path: build-cache/*.whl
+          key: frida-${{ hashFiles('scripts/build-tools.ps1') }}
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --yes --no-progress
+          }
+
+      - name: Build, test and package
+        shell: pwsh
+        run: ./scripts/package.ps1 -RepositoryUrl "${{ github.server_url }}/${{ github.repository }}"
+
+      # 真的装一遍：安装、在守护器运行时升级、旧守护器不退出时拒绝、卸载后保留数据。
+      - name: Installer smoke test
+        shell: pwsh
+        run: ./scripts/test-installer.ps1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NoReturnGuardian
+          path: |
+            out/*.exe
+            out/*.zip
+            out/SHA256SUMS.txt
+          if-no-files-found: error
+
+      # 推送 v1.2.3 这样的标签：核对与 AssemblyInfo.cs 的版本一致，再建一个草稿发布，确认后手动发布。
+      - name: Draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          . ./scripts/build-tools.ps1
+          $version = Get-ProductVersion
+          if ("${{ github.ref_name }}" -ne "v$version") { throw "Tag ${{ github.ref_name }} does not match version $version." }
+          gh release create "${{ github.ref_name }}" --draft --title "赴死之旅守护器 $version" --generate-notes `
+            "out/NoReturnGuardian-$version-setup.exe" "out/NoReturnGuardian-$version-win-x64.zip" out/SHA256SUMS.txt

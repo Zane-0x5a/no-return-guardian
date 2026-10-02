@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildToolsPath)\Microsoft.Common.props" Condition="Exists('$(MSBuildToolsPath)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{DC0D322F-CFD2-4CB0-A3ED-BB16908F34D7}</ProjectGuid>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>NoReturnGuardian</RootNamespace>
+    <AssemblyName>NoReturnGuardian</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FrameworkPathOverride Condition=" '$(FrameworkPathOverride)' == '' ">C:\Windows\Microsoft.NET\Framework64\v4.0.30319</FrameworkPathOverride>
+    <LangVersion>latest</LangVersion>
+    <FileAlignment>512</FileAlignment>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>assets\guardian.ico</ApplicationIcon>
+    <Deterministic>true</Deterministic>
+    <Prefer32Bit>false</Prefer32Bit>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Web.Extensions" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Xml" />
+    <!-- WebView2 SDK 1.0.4258.31（lib\webview2）。程序集编进 exe 作为资源，由 Program 在首次使用时加载。 -->
+    <Reference Include="Microsoft.Web.WebView2.Core">
+      <HintPath>lib\webview2\Microsoft.Web.WebView2.Core.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Microsoft.Web.WebView2.WinForms">
+      <HintPath>lib\webview2\Microsoft.Web.WebView2.WinForms.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="MainForm.cs" />
+    <Compile Include="FolderPicker.cs" />
+    <Compile Include="GuardianView.cs" />
+    <Compile Include="NativeRecovery.cs" />
+    <Compile Include="NativeRecoveryCoordinator.cs" />
+    <Compile Include="RecoveryJournal.cs" />
+    <Compile Include="DepartureRecorder.cs" />
+    <Compile Include="AutoCleanup.cs" />
+    <Compile Include="FileRestore.cs" />
+    <Compile Include="IGuardianHost.cs" />
+    <Compile Include="GuardianTray.cs" />
+    <Compile Include="StartupEntry.cs" />
+    <Compile Include="DiagnosticLog.cs" />
+    <Compile Include="WarmRestoreDialog.cs" />
+    <Compile Include="StateTranscript.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Ui\UiTheme.cs" />
+    <Compile Include="Ui\WarmDialogControls.cs" />
+    <Compile Include="Ui\WebShell.cs" />
+    <Compile Include="Ui\WindowChrome.cs" />
+    <Compile Include="..\NoReturnGuardian.Core\*.cs">
+      <Link>Core\%(Filename)%(Extension)</Link>
+    </Compile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="app.manifest" />
+    <None Include="App.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 界面：src\NoReturnGuardian.Web 用 npm run build 生成的 dist\index.html。 -->
+    <EmbeddedResource Include="..\NoReturnGuardian.Web\dist\index.html">
+      <LogicalName>NoReturnGuardian.Ui.index.html</LogicalName>
+    </EmbeddedResource>
+    <!-- 图标：scripts\make-icons.py 生成。窗口、任务栏和托盘都从这里取，不依赖 exe 旁边的文件。 -->
+    <EmbeddedResource Include="assets\guardian.ico">
+      <LogicalName>NoReturnGuardian.Icons.guardian.ico</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="assets\tray-guarding.ico">
+      <LogicalName>NoReturnGuardian.Icons.tray-guarding.ico</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="assets\tray-alert.ico">
+      <LogicalName>NoReturnGuardian.Icons.tray-alert.ico</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="assets\tray-idle.ico">
+      <LogicalName>NoReturnGuardian.Icons.tray-idle.ico</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="lib\webview2\Microsoft.Web.WebView2.Core.dll">
+      <LogicalName>NoReturnGuardian.WebView2.Core.dll</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="lib\webview2\Microsoft.Web.WebView2.WinForms.dll">
+      <LogicalName>NoReturnGuardian.WebView2.WinForms.dll</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="lib\webview2\x64\WebView2Loader.dll">
+      <LogicalName>NoReturnGuardian.WebView2Loader.x64.dll</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="lib\webview2\x86\WebView2Loader.dll">
+      <LogicalName>NoReturnGuardian.WebView2Loader.x86.dll</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="lib\webview2\arm64\WebView2Loader.dll">
+      <LogicalName>NoReturnGuardian.WebView2Loader.arm64.dll</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

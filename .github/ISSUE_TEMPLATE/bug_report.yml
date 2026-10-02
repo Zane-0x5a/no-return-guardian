@@ -1,0 +1,51 @@
+name: 问题反馈
+description: 恢复没成功、出发没记下来，或者守护器行为不对
+body:
+  - type: markdown
+    attributes:
+      value: |
+        谢谢反馈。附上诊断日志能帮忙最快找到原因，位置见 README 的“反馈问题”一节。
+        日志里有存档路径，路径中含平台账号 ID，公开上传前可以把它替换掉。
+  - type: input
+    id: version
+    attributes:
+      label: 守护器版本
+      description: 安装程序或 zip 文件名里的版本号，或者 NoReturnGuardian.exe 的属性 → 详细信息。
+    validations:
+      required: true
+  - type: dropdown
+    id: action
+    attributes:
+      label: 做了什么
+      options:
+        - 恢复兵营（游戏运行中）
+        - 重开战斗
+        - 退出游戏后恢复
+        - 保护战备 / 出发自动保存
+        - 安装、升级或卸载
+        - 其他
+    validations:
+      required: true
+  - type: dropdown
+    id: place
+    attributes:
+      label: 当时游戏停在哪里
+      options:
+        - 死亡结算页
+        - 赴死之旅菜单
+        - 战斗中
+        - 兵营里
+        - 游戏没在运行
+        - 不确定
+  - type: textarea
+    id: happened
+    attributes:
+      label: 发生了什么
+      description: 守护器或托盘提示了什么，游戏里看到了什么。
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 诊断日志
+      description: 把出问题那一次的 recovery-* 文件和 guardian.log 拖进这里，或贴上相关的几行。

@@ -1,0 +1,1 @@
+Microsoft.Web.WebView2 1.0.4258.31 from nuget.org: lib/net462 assemblies and runtimes/*/native loaders.

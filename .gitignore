@@ -1,0 +1,26 @@
+# 构建产物与下载缓存
+/dist/
+/out/
+/build-cache/
+/tools/
+bin/
+obj/
+node_modules/
+/src/NoReturnGuardian.Web/dist/
+__pycache__/
+*.pyc
+
+# 本机证据：实机转录、快照库、运行日志和存档备份。里面是玩家自己的存档（路径含平台账号 ID），不公开。
+# 重放它们的测试在缺少时跳过，见 scripts/diagnostics/local_evidence.py。
+/artifacts/
+/emergency-backups/
+
+# 本机工具状态
+/.claude/
+**/.impeccable/
+
+# 内部文档不公开：研究记录、产品与设计说明、代理守则。公开的只有 README、LICENSE 和第三方声明。
+/docs/
+/AGENTS.md
+/PRODUCT.md
+/DESIGN.md
