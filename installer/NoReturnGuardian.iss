@@ -94,21 +94,21 @@ begin
     '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
 end;
 
-{ 像托盘“退出”一样请守护器退出（--exit），最多等十秒。原生恢复进行中时它不会退。 }
+{ 像托盘“退出”一样请守护器退出（--exit），最多等十秒。原生恢复进行中时它不会退。
+  刚启动的守护器可能还没开始接收请求，等待期间每秒重发一次。 }
 function StopGuardian(const Exe: String): Boolean;
 var
   Code, I: Integer;
 begin
   if GuardianRunning and FileExists(Exe) then
-  begin
-    Exec(Exe, '--exit', '', SW_HIDE, ewWaitUntilTerminated, Code);
-    for I := 1 to 50 do
+    for I := 0 to 49 do
     begin
       if not GuardianRunning then
         Break;
+      if I mod 5 = 0 then
+        Exec(Exe, '--exit', '', SW_HIDE, ewWaitUntilTerminated, Code);
       Sleep(200);
     end;
-  end;
   Result := not GuardianRunning;
 end;
 

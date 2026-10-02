@@ -64,9 +64,23 @@ function Wait-Until([scriptblock]$Condition, [int]$Seconds) {
     & $Condition
 }
 
+# 失败时打印安装日志和守护器日志：临时目录随后就删掉了，CI 上只剩这里的输出。
+function Write-Diagnostics {
+    foreach ($log in @(Get-ChildItem -LiteralPath $root -Filter '*.log' -ErrorAction SilentlyContinue)) {
+        Write-Output "---- $($log.Name), last 40 lines"
+        Get-Content -LiteralPath $log.FullName -Tail 40
+    }
+    $guardianLog = Join-Path $data 'guardian.log'
+    if (Test-Path -LiteralPath $guardianLog) {
+        Write-Output '---- guardian.log, last 40 lines'
+        Get-Content -LiteralPath $guardianLog -Tail 40
+    }
+}
+
 try {
     Write-Output "Installer: $Setup"
-    Assert-That ((Invoke-Setup 'install') -eq 0) 'a fresh per-user install succeeds'
+    $code = Invoke-Setup 'install'
+    Assert-That ($code -eq 0) "a fresh per-user install succeeds (exit $code)"
     foreach ($file in @('NoReturnGuardian.exe', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'native-recovery\runtime.json',
             'native-recovery\python\python.exe', 'native-recovery\tools\VerifySnapshot.exe',
             'native-recovery\tools\native-probe-deps\frida\_frida.pyd', 'native-recovery\scripts\diagnostics\NativeDepartureRecorder.py')) {
@@ -78,14 +92,16 @@ try {
     Start-Guardian
     Set-ItemProperty -LiteralPath $runKey -Name NoReturnGuardian -Value "`"$(Join-Path $app 'NoReturnGuardian.exe')`" --minimized"
     Set-Content -LiteralPath (Join-Path $app 'native-recovery\stale.txt') -Value 'left by an older version'
-    Assert-That ((Invoke-Setup 'upgrade') -eq 0) 'an upgrade over a running Guardian succeeds'
+    $code = Invoke-Setup 'upgrade'
+    Assert-That ($code -eq 0) "an upgrade over a running Guardian succeeds (exit $code)"
     Assert-That (-not (Test-GuardianRunning)) 'the upgrade asked the running Guardian to exit'
     Assert-That (-not (Test-Path -LiteralPath (Join-Path $app 'native-recovery\stale.txt'))) 'the upgrade replaces the native components as a whole'
 
     # 不响应 --exit 的旧守护器：安装程序等不到它退出，就拒绝安装，什么也不改。
     $holder = [Threading.Mutex]::new($true, $mutexName)
     try {
-        Assert-That ((Invoke-Setup 'refused') -eq 7) 'setup refuses while a Guardian that ignores --exit runs'
+        $code = Invoke-Setup 'refused'
+        Assert-That ($code -eq 7) "setup refuses while a Guardian that ignores --exit runs (exit $code)"
     }
     finally {
         $holder.ReleaseMutex()
@@ -102,6 +118,10 @@ try {
     Assert-That ($null -eq (Get-ItemProperty -LiteralPath $runKey -Name NoReturnGuardian -ErrorAction SilentlyContinue)) 'uninstall removes the startup entry that pointed at it'
     Assert-That (Test-Path -LiteralPath $sentinel) 'uninstall keeps the player data'
     Write-Output 'Installer smoke test passed.'
+}
+catch {
+    Write-Diagnostics
+    throw
 }
 finally {
     Get-Process -Name NoReturnGuardian -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$app*" } | Stop-Process -Force

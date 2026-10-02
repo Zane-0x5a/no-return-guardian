@@ -71,6 +71,7 @@ namespace NoReturnGuardian
         private System.Threading.RegisteredWaitHandle _showWait;
         private System.Threading.EventWaitHandle _exitSignal;
         private System.Threading.RegisteredWaitHandle _exitWait;
+        private volatile bool _exitRequested;
         private const int RecoveryHotkeyId = 0x4E52;
         private const int RestartHotkeyId = 0x4E53;
         private const string RecoveryHotkeyName = "Ctrl+Alt+F9";
@@ -255,6 +256,10 @@ namespace NoReturnGuardian
             base.OnHandleCreated(e);
             WindowChrome.Apply(Handle);
             FitToDpi(true);
+            if (_exitRequested)
+            {
+                BeginInvoke(new Action(ExitIfRequested));
+            }
 
             if (_render != null || !NativeRecovery.Available)
             {
@@ -745,17 +750,27 @@ namespace NoReturnGuardian
                 false, System.Threading.EventResetMode.AutoReset, Program.ExitEventName);
             _exitWait = System.Threading.ThreadPool.RegisterWaitForSingleObject(_exitSignal, (state, timedOut) =>
             {
+                // 刚启动、窗口还没建好时先记下，建好后再处理（见 OnHandleCreated），请求不会丢。
+                _exitRequested = true;
                 if (IsHandleCreated && !IsDisposed)
                 {
-                    BeginInvoke(new Action(() =>
-                    {
-                        if (!NativeRecovery.Running)
-                        {
-                            ExitApplication();
-                        }
-                    }));
+                    BeginInvoke(new Action(ExitIfRequested));
                 }
             }, null, -1, false);
+        }
+
+        private void ExitIfRequested()
+        {
+            if (!_exitRequested)
+            {
+                return;
+            }
+
+            _exitRequested = false;
+            if (!NativeRecovery.Running)
+            {
+                ExitApplication();
+            }
         }
 
         private void WireServiceEvents()

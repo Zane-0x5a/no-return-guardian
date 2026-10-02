@@ -155,18 +155,25 @@ namespace NoReturnGuardian
                     return;
                 }
 
-                Application.EnableVisualStyles();
-                Application.SetCompatibleTextRenderingDefault(false);
-                Application.ThreadException += (sender, eventArgs) =>
-                    ReportUnhandled(eventArgs.Exception);
-                AppDomain.CurrentDomain.UnhandledException += (sender, eventArgs) =>
-                    ReportUnhandled(eventArgs.ExceptionObject as Exception);
+                // 互斥量一建好就建好两个请求事件：安装程序或再次启动的进程看到互斥量时，事件已经在了。
+                // 窗口建好之前到达的请求留在事件里，MainForm 开始监听后接着处理。
+                using (new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName))
+                using (new EventWaitHandle(false, EventResetMode.AutoReset, ExitEventName))
+                {
+                    Application.EnableVisualStyles();
+                    Application.SetCompatibleTextRenderingDefault(false);
+                    Application.ThreadException += (sender, eventArgs) =>
+                        ReportUnhandled(eventArgs.Exception);
+                    AppDomain.CurrentDomain.UnhandledException += (sender, eventArgs) =>
+                        ReportUnhandled(eventArgs.ExceptionObject as Exception);
 
-                bool startMinimized = args.Any(value => string.Equals(
-                    value,
-                    "--minimized",
-                    StringComparison.OrdinalIgnoreCase));
-                RunGuardian(startMinimized);
+                    bool startMinimized = args.Any(value => string.Equals(
+                        value,
+                        "--minimized",
+                        StringComparison.OrdinalIgnoreCase));
+                    RunGuardian(startMinimized);
+                }
+
                 GC.KeepAlive(mutex);
             }
         }
