@@ -31,6 +31,8 @@ $mutexName = 'Local\NoReturnGuardian-2FE084E5-A526-474D-9E78-22F0068C78A1'
 $root = Join-Path ([IO.Path]::GetTempPath()) ('nrg-installer-' + [guid]::NewGuid().ToString('N'))
 $app = Join-Path $root 'app'
 New-Item -ItemType Directory -Path $root -Force | Out-Null
+# 全新的虚拟机上可能还没有开机启动项的键。
+if (-not (Test-Path -LiteralPath $runKey)) { New-Item -Path $runKey -Force | Out-Null }
 $previousRun = (Get-ItemProperty -LiteralPath $runKey -Name NoReturnGuardian -ErrorAction SilentlyContinue).NoReturnGuardian
 # 新机器上守护器启动后不一定写下玩家数据，卸载前放一个哨兵文件代替它。
 $data = Join-Path $env:LOCALAPPDATA 'NoReturnGuardian'
@@ -44,7 +46,11 @@ function Assert-That([bool]$Condition, [string]$Message) {
 
 function Invoke-Setup([string]$Name, [string[]]$Extra = @()) {
     $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', "/DIR=`"$app`"", "/LOG=`"$(Join-Path $root "$Name.log")`"") + $Extra
-    (Start-Process -FilePath $Setup -ArgumentList $arguments -Wait -PassThru).ExitCode
+    # 不用 -Wait：它连子进程一起等，而 /RELAUNCH 重新打开的守护器就是安装程序的子进程。
+    $process = Start-Process -FilePath $Setup -ArgumentList $arguments -PassThru
+    $null = $process.Handle
+    $process.WaitForExit()
+    $process.ExitCode
 }
 
 function Test-GuardianRunning {
