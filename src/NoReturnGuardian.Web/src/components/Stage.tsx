@@ -86,22 +86,21 @@ export function Stage({ state, onProtect, onUndo, onLaunch, onChooseProfile, onW
         </div>
       </div>
 
-      {(hotkeys.recover || hotkeys.restart) && (
-        <dl className="hotkeys">
-          {hotkeys.recover && (
-            <div>
-              <dt><Keys combo={hotkeys.recover} /></dt>
-              <dd>恢复兵营</dd>
-            </div>
-          )}
-          {hotkeys.restart && (
-            <div>
-              <dt><Keys combo={hotkeys.restart} /></dt>
-              <dd>重开战斗</dd>
-            </div>
-          )}
-        </dl>
-      )}
+      {/* 底边这一行留给快捷键和提示条，没有快捷键时也空着。 */}
+      <dl className="hotkeys">
+        {hotkeys.recover && (
+          <div>
+            <dt><Keys combo={hotkeys.recover} /></dt>
+            <dd>恢复兵营</dd>
+          </div>
+        )}
+        {hotkeys.restart && (
+          <div>
+            <dt><Keys combo={hotkeys.restart} /></dt>
+            <dd>重开战斗</dd>
+          </div>
+        )}
+      </dl>
     </section>
   );
 }

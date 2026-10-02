@@ -1,7 +1,7 @@
 import type { Command, HostMessage, Mode, SnapshotView, ViewState } from './types';
 
 // 浏览器预览用的模拟宿主：?scene=guarding|observing|idle|alert|empty|noprofile|blocked，
-// ?update=1 有新版本（?update=portable 是便携版，只能打开下载页）
+// ?update=1 有新版本（?update=portable 是便携版，只能打开下载页），?toast=文字 打开时弹出提示（可以写多个）
 // 只模拟界面会看到的结果，不代表真实门控。
 
 type Listener = (message: HostMessage) => void;
@@ -95,6 +95,7 @@ export function createMockHost() {
       case 'ready':
         push({});
         if (params.get('sheet') === 'interrupted') emit({ type: 'sheet', sheet: { kind: 'interrupted' } });
+        params.getAll('toast').forEach((text) => toast(text, 'neutral'));
         break;
       case 'protect': {
         const now = new Date();

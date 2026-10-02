@@ -112,9 +112,10 @@ p {
 /* ---------- 布局 ---------- */
 
 .app {
+  --stage: max(360px, 41%);
   position: relative;
   display: grid;
-  grid-template-columns: minmax(360px, 41%) 1fr;
+  grid-template-columns: var(--stage) 1fr;
   height: 100%;
 }
 
@@ -298,10 +299,12 @@ button,
   margin-left: -14px;
 }
 
+/* 至少一条提示条高，快捷键和提示条的中线对齐。 */
 .hotkeys {
   display: flex;
   flex-wrap: wrap;
   gap: 10px 26px;
+  min-height: 74px;
   margin: auto 0 0;
   padding-top: 30px;
 }
@@ -989,22 +992,29 @@ kbd {
 
 /* ---------- 提示条 ---------- */
 
-/* 提示出现在字标下方的留白里，不压住快捷键和按钮。 */
+/* 提示占舞台底部快捷键那一行（.hotkeys 一直留着这一行），期间快捷键淡出。
+   大字和按钮会随窗口高度上下移动，这一行不会，所以提示压不到它们；宽度也不越过右边的面板。 */
 .toasts {
   position: fixed;
   left: 52px;
-  top: 92px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  max-width: min(520px, 50vw);
+  bottom: 36px;
+  max-width: calc(var(--stage) - 72px);
   z-index: 5;
   pointer-events: none;
 }
 
+.hotkeys > div {
+  transition: opacity 0.4s var(--ease);
+}
+
+.app:has(.toast) .hotkeys > div {
+  opacity: 0;
+}
+
 .toast {
   padding: 11px 20px;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
   border: 1px solid var(--hair);
   border-radius: 18px;
   background: rgba(18, 17, 16, 0.72);
@@ -1149,6 +1159,13 @@ kbd {
   font-size: 13px;
   letter-spacing: 0.06em;
   color: var(--ink);
+}
+
+.sheet .sheet-note {
+  margin-top: 8px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
 }
 
 .sheet .sheet-progress.failed {

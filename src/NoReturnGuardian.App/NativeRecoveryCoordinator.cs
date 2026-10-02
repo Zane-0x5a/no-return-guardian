@@ -268,13 +268,12 @@ namespace NoReturnGuardian
             }
             else
             {
-                _host.Notify(request.Restart ? "正在重开战斗" : "正在恢复兵营",
-                    request.FromHideout
-                        ? "从这个兵营按记录的路线出发。"
-                        : request.Restart && !request.Redeploy
-                            ? "回到 " + targetTime + " 的战备。这份战备还没有出发记录，请在兵营手动出发一次，之后即可直接重开。"
-                            : "回到 " + targetTime + " 的战备" + (request.Redeploy ? "后自动出发。" : "。"),
-                    ToolTipIcon.Info);
+                string body = (request.FromHideout
+                    ? "从这个兵营按记录的路线出发"
+                    : "回到 " + targetTime + " 的战备" + (request.Redeploy ? "后自动出发" : "")) + "，请保持游戏在前台。";
+                if (request.Restart && !request.Redeploy && !request.FromHideout)
+                    body += "这份战备还没有出发记录，请在兵营手动出发一次，之后即可直接重开。";
+                _host.Notify(request.Restart ? "正在重开战斗" : "正在恢复兵营", body, ToolTipIcon.Info);
             }
 
             worker.RunWorkerAsync();

@@ -182,6 +182,7 @@ function NativeBody({ sheet, state, onClose, onNative }: {
       <p className={`sheet-progress${sheet.phase === 'failed' ? ' failed' : ''}`} aria-live="polite">
         {sheet.text}
       </p>
+      {running && <p className="sheet-note">请保持游戏在前台</p>}
       {!running && (
         <div className="sheet-actions">
           <Button variant="ghost" data-autofocus onClick={onClose}>关闭</Button>

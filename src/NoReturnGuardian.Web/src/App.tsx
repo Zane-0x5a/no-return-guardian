@@ -26,17 +26,18 @@ export function App() {
   const [fresh, setFresh] = useState<string | null>(null);
   const [sheet, setSheet] = useState<Sheet | null>(null);
   const [view, setView] = useState<'ledger' | 'settings'>('ledger');
-  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [notice, setNotice] = useState<Toast | null>(null);
   const focusNonce = useRef(0);
   const sheetRef = useRef<Sheet | null>(null);
   sheetRef.current = sheet;
 
   const send = useCallback((command: Command) => host.send(command), []);
 
+  // 同一时间只显示一条提示，新的直接替换旧的。
   const toast = useCallback((text: string, tone: Tone) => {
     const id = Date.now() + Math.random();
-    setToasts((items) => [...items.slice(-2), { id, text, tone }]);
-    window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), tone === 'danger' ? 8000 : 4200);
+    setNotice({ id, text, tone });
+    window.setTimeout(() => setNotice((current) => (current?.id === id ? null : current)), tone === 'danger' ? 8000 : 4200);
   }, []);
 
   useEffect(() => {
@@ -237,11 +238,11 @@ export function App() {
       </section>
 
       <div className="toasts" aria-live="polite">
-        {toasts.map((item) => (
-          <div key={item.id} className={`toast toast-${item.tone}`}>
-            {item.text}
+        {notice && (
+          <div key={notice.id} className={`toast toast-${notice.tone}`}>
+            {notice.text}
           </div>
-        ))}
+        )}
       </div>
 
       {sheet && (
