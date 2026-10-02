@@ -138,11 +138,12 @@ button,
 
 /* ---------- 舞台 ---------- */
 
+/* 底边留白随窗口高度放大：按钮和快捷键是最重的一组，贴着底边会显得挤。 */
 .stage {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 34px 40px 36px 52px;
+  padding: 34px 40px clamp(44px, 10vh, 96px) 52px;
 }
 
 .stage > * {
@@ -312,7 +313,7 @@ button,
 /* 按两行快捷键的高度固定，次要操作只有一行，也占这么高。 */
 .stage-foot {
   min-height: 54px;
-  margin-top: 16px;
+  margin-top: 26px;
 }
 
 .stage-secondary {
