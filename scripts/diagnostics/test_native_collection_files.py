@@ -10,7 +10,8 @@ class FileWitnessTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        # 见证者按解析后的路径打开文件；CI 的临时目录是 8.3 短名，不先解析就对不上下面打补丁的路径。
+        self.root = Path(self.temp.name).resolve()
         self.profile = self.root / 'profile'
         (self.profile / 'gamedata').mkdir(parents=True)
         self.source = self.profile / 'gamedata' / 'R0A.save'
