@@ -27,6 +27,9 @@ jobs:
         with:
           python-version: '3.13.7'
 
+      - name: Install Python test dependencies
+        run: python -m pip install --disable-pip-version-check -r scripts/requirements-test.txt
+
       - name: Cache pinned downloads
         uses: actions/cache@v4
         with:

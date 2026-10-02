@@ -161,7 +161,7 @@ WebView2 运行时无法启动时守护器留在托盘，游戏内快捷键照�
 
 - Visual Studio 2022 或 Build Tools，选“.NET 桌面开发”（MSBuild、Roslyn 和 .NET Framework 4.8）。
 - Node.js 20.19 以上（构建界面）。
-- Python 3.13（只用于跑测试；发布包自带自己的 Python）。
+- Python 3.13（只用于跑测试；发布包自带自己的 Python），再装测试依赖：`python -m pip install -r scripts\requirements-test.txt`。
 - Inno Setup 6（只用于生成安装程序）：`winget install JRSoftware.InnoSetup --scope user`。
 - 首次构建原生组件时联网：从 python.org 下载 Python 嵌入式包、从 PyPI 下载 Frida，按 `scripts\build-tools.ps1` 里固定的 SHA-256 核对，缓存在 `build-cache\`。
 
