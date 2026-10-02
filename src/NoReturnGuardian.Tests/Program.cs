@@ -92,7 +92,10 @@ namespace NoReturnGuardian.Tests
             new TestCase("Windows credits probe identifies the exact resource owner", TestWindowsCreditsResourceProbe),
             new TestCase("encounter exit raises suspected end without creating a snapshot", TestMonitorEndDetection),
             new TestCase("running unknown and hideout transitions never mimic run end", TestMonitorRunningTransitionNotEnd),
-            new TestCase("monitor ignores transient incomplete state", TestMonitorTransientLoss)
+            new TestCase("monitor ignores transient incomplete state", TestMonitorTransientLoss),
+            new TestCase("release feed reads only published vX.Y.Z releases from GitHub's redirect", TestReleaseFeedParsing),
+            new TestCase("release feed compares versions and builds the page from the version alone", TestReleaseFeedComparison),
+            new TestCase("update checks default on, also for an older settings file", TestUpdateSettingsDefault)
         };
 
         private static int Main()
@@ -1998,6 +2001,77 @@ namespace NoReturnGuardian.Tests
                     stopped.SuspectedRunEnded,
                     "exit after an observed hideout return was called an encounter end");
                 Assert.Equal(1, store.ListSnapshots().Count);
+            }
+        }
+
+        private static void TestReleaseFeedParsing()
+        {
+            string releases = ReleaseFeed.ReleasesPage;
+            Assert.Equal(new Version(1, 2, 3), ReleaseFeed.ParseLatestRedirect(releases + "/tag/v1.2.3"));
+            Assert.Equal(new Version(1, 2, 3), ReleaseFeed.ParseLatestRedirect("/Zane-0x5a/no-return-guardian/releases/tag/v1.2.3"));
+            Assert.True(ReleaseFeed.ParseLatestRedirect(releases) == null, "nothing is published yet");
+            foreach (string tag in new[] { "1.2.3", "v1.2", "v1.2.3-rc1", "v1.2.3.4", "release" })
+            {
+                Assert.True(ReleaseFeed.ParseLatestRedirect(releases + "/tag/" + tag) == null, "tag " + tag + " is not a release version");
+            }
+
+            // 跳到别处（其他网站、登录页、别的仓库、下载链接）或没有跳转，都算检查失败，不算“没有新版本”。
+            foreach (string location in new[]
+            {
+                null, "",
+                "https://example.com/Zane-0x5a/no-return-guardian/releases/tag/v9.9.9",
+                "http://github.com/Zane-0x5a/no-return-guardian/releases/tag/v9.9.9",
+                "https://github.com/login?return_to=%2FZane-0x5a%2Fno-return-guardian%2Freleases%2Flatest",
+                "https://github.com/someone/else/releases/tag/v9.9.9",
+                releases + "x",
+                releases + "/download/v1.2.3/NoReturnGuardian-1.2.3-setup.exe"
+            })
+            {
+                bool failed = false;
+                try
+                {
+                    ReleaseFeed.ParseLatestRedirect(location);
+                }
+                catch (FormatException)
+                {
+                    failed = true;
+                }
+
+                Assert.True(failed, "redirect [" + location + "] must fail the check");
+            }
+        }
+
+        private static void TestReleaseFeedComparison()
+        {
+            Version current = new Version(1, 0, 0, 0);
+            Assert.True(ReleaseFeed.IsNewer(new Version(1, 0, 1), current), "a newer patch is an update");
+            Assert.True(ReleaseFeed.IsNewer(new Version(1, 10, 0), new Version(1, 9, 5, 0)), "versions compare as numbers");
+            Assert.False(ReleaseFeed.IsNewer(new Version(1, 0, 0), current), "the same version is not an update");
+            Assert.False(ReleaseFeed.IsNewer(new Version(0, 9, 9), current), "an older release is not an update");
+            Assert.False(ReleaseFeed.IsNewer(null, current), "no published release is not an update");
+            Assert.Equal(new Version(1, 0, 1), ReleaseFeed.ParseStored("1.0.1"));
+            Assert.True(ReleaseFeed.ParseStored(null) == null && ReleaseFeed.ParseStored("1.0") == null && ReleaseFeed.ParseStored("garbage") == null,
+                "a missing or malformed stored version is ignored");
+            Assert.Equal("1.0.0", ReleaseFeed.Display(current));
+            Assert.Equal("https://github.com/Zane-0x5a/no-return-guardian/releases/tag/v1.0.1", ReleaseFeed.PageFor(new Version(1, 0, 1)));
+            Assert.Equal(ReleaseFeed.ReleasesPage, ReleaseFeed.PageFor(null));
+        }
+
+        private static void TestUpdateSettingsDefault()
+        {
+            using (TestWorkspace workspace = new TestWorkspace())
+            {
+                string path = Path.Combine(workspace.Root, "settings.json");
+                File.WriteAllText(path, "{\"AutoCleanup\":true}");
+                SettingsStore store = new SettingsStore(path);
+                GuardianSettings loaded = store.Load();
+                Assert.True(loaded.CheckForUpdates && loaded.AutoCleanup, "a settings file from before update checks keeps them on");
+                loaded.CheckForUpdates = false;
+                loaded.LatestRelease = "1.0.1";
+                store.Save(loaded);
+                GuardianSettings reloaded = store.Load();
+                Assert.False(reloaded.CheckForUpdates, "turning update checks off persists");
+                Assert.Equal("1.0.1", reloaded.LatestRelease);
             }
         }
 

@@ -54,6 +54,8 @@ namespace NoReturnGuardian
             public string RecoverHotkey;
             public string RestartHotkey;
             public Func<string, bool> HasDeparture;
+            /// <summary>GitHub 上比当前更新的正式版；没有或玩家关了检查更新时为空。</summary>
+            public Version UpdateAvailable;
         }
 
         /// <summary>
@@ -153,7 +155,11 @@ namespace NoReturnGuardian
                     "autoCleanup", settings.AutoCleanup,
                     "showUndo", settings.ShowUndoPoints,
                     "panelTransparency", settings.PanelTransparency,
+                    "checkUpdates", settings.CheckForUpdates,
                     "profilePath", settings.ProfilePath ?? ""),
+                "version", Map(
+                    "current", ReleaseFeed.Display(UpdateCheck.Current),
+                    "available", input.UpdateAvailable == null ? null : ReleaseFeed.Display(input.UpdateAvailable)),
                 "library", Map(
                     "count", records.Count,
                     "size", FormatBytes(bytes),

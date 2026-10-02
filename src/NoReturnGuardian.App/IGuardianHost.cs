@@ -36,8 +36,8 @@ namespace NoReturnGuardian
         /// <summary>Core 操作结果的玩家可读说明（GuardianView.FriendlyMessage）；失败的原话进诊断记录。</summary>
         void ShowResult(string code, string detail, bool success);
 
-        /// <summary>托盘气泡；游戏在前台时玩家看到的就是它。</summary>
-        void Notify(string title, string text, ToolTipIcon icon);
+        /// <summary>托盘气泡；游戏在前台时玩家看到的就是它。给了 clicked 时，点气泡执行它。</summary>
+        void Notify(string title, string text, ToolTipIcon icon, Action clicked = null);
 
         /// <summary>恢复面板的进度：running、done、failed。</summary>
         void PostRecovery(string phase, string text);

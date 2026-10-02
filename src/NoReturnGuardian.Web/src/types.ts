@@ -60,8 +60,12 @@ export interface ViewState {
     showUndo: boolean;
     /** 右侧面板的透明度，0 不透明 · 100 只剩磨砂 */
     panelTransparency: number;
+    /** 每天向 GitHub 查一次有没有新的正式版 */
+    checkUpdates: boolean;
     profilePath: string;
   };
+  /** 当前版本；available 是 GitHub 上更新的正式版，没有或关了检查更新时为空 */
+  version: { current: string; available: string | null };
   library: { count: number; size: string; preparations: number; scenes: number };
   busy: boolean;
   /** 有原生恢复在进行（包括游戏内快捷键发起的） */
@@ -109,4 +113,6 @@ export type Command =
   | { name: 'auto-cleanup'; value: boolean }
   | { name: 'show-undo'; value: boolean }
   | { name: 'panel-transparency'; value: number }
+  | { name: 'check-updates'; value: boolean }
+  | { name: 'open-release' }
   | { name: 'window'; action: 'minimize' | 'close' | 'maximize' };

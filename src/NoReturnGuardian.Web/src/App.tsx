@@ -173,6 +173,7 @@ export function App() {
         onLaunch={() => send({ name: 'launch' })}
         onChooseProfile={() => send({ name: 'choose-profile' })}
         onWarm={() => send({ name: 'warm' })}
+        onOpenRelease={() => send({ name: 'open-release' })}
       />
 
       <section className="panel" aria-label={view === 'ledger' ? '战备' : '设置'}>
@@ -227,6 +228,8 @@ export function App() {
               onShowUndo={(value) => send({ name: 'show-undo', value })}
               panelTransparency={panelTransparency}
               onPanelTransparency={changeTransparency}
+              onCheckUpdates={(value) => send({ name: 'check-updates', value })}
+              onOpenRelease={() => send({ name: 'open-release' })}
             />
           )}
         </div>

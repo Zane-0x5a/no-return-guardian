@@ -81,4 +81,12 @@ export const Icon = {
       <path d="M3.8 7.2V18h16.4V8.8h-8.1L10.4 7H3.8Z" />
     </svg>
   ),
+  /** 新版本：落到托盘线上的箭头。 */
+  download: () => (
+    <svg {...base}>
+      <path d="M12 4.5v10" />
+      <path d="m7.8 10.6 4.2 4.2 4.2-4.2" />
+      <path d="M5 19.5h14" />
+    </svg>
+  ),
 };

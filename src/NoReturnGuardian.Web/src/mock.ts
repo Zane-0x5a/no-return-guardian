@@ -1,6 +1,6 @@
 import type { Command, HostMessage, Mode, SnapshotView, ViewState } from './types';
 
-// 浏览器预览用的模拟宿主：?scene=guarding|observing|idle|alert|empty|noprofile|blocked
+// 浏览器预览用的模拟宿主：?scene=guarding|observing|idle|alert|empty|noprofile|blocked，?update=1 有新版本
 // 只模拟界面会看到的结果，不代表真实门控。
 
 type Listener = (message: HostMessage) => void;
@@ -64,8 +64,10 @@ export function createMockHost() {
       autoCleanup: false,
       showUndo: params.get('undo') === '1',
       panelTransparency: Number(params.get('glass') ?? 60),
+      checkUpdates: true,
       profilePath: 'C:\\Users\\Player\\Documents\\The Last of Us Part II\\76561198000000000',
     },
+    version: { current: '1.0.0', available: params.get('update') === '1' ? '1.0.1' : null },
     library: { count: snapshots.length, size: '70.9 MB', preparations: 4, scenes: 3 },
     busy: false,
     working: false,
@@ -154,6 +156,15 @@ export function createMockHost() {
         break;
       case 'startup':
         push({ settings: { ...state.settings, startup: command.value } });
+        break;
+      case 'check-updates':
+        push({
+          settings: { ...state.settings, checkUpdates: command.value },
+          version: { ...state.version, available: command.value && params.get('update') === '1' ? '1.0.1' : null },
+        });
+        break;
+      case 'open-release':
+        toast('已打开下载页', 'neutral');
         break;
       default:
         break;

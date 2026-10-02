@@ -9,10 +9,11 @@ interface StageProps {
   onLaunch: () => void;
   onChooseProfile: () => void;
   onWarm: () => void;
+  onOpenRelease: () => void;
 }
 
 // 左侧舞台：只回答三件事——现在守护着吗、最近一次保护在几点、下一步按哪里。
-export function Stage({ state, onProtect, onUndo, onLaunch, onChooseProfile, onWarm }: StageProps) {
+export function Stage({ state, onProtect, onUndo, onLaunch, onChooseProfile, onWarm, onOpenRelease }: StageProps) {
   const { hotkeys } = state;
   return (
     <section className="stage">
@@ -21,6 +22,11 @@ export function Stage({ state, onProtect, onUndo, onLaunch, onChooseProfile, onW
         <span className="wordmark-rule" />
         <span>GUARDIAN</span>
       </header>
+      {state.version.available && (
+        <Button variant="ghost" className="update-note" icon={<Icon.download />} title="打开下载页" onClick={onOpenRelease}>
+          新版本 {state.version.available}
+        </Button>
+      )}
 
       <div className={`status status-${state.mode}`} key={state.headline}>
         <h1 className={`status-headline${state.headline.length > 4 ? ' long' : ''}`}>{state.headline}</h1>

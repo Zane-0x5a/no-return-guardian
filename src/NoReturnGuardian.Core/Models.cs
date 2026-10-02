@@ -100,6 +100,7 @@ namespace NoReturnGuardian.Core
             StabilityDelayMs = 2200;
             AutomaticRetention = 60;
             PanelTransparency = DefaultPanelTransparency;
+            CheckForUpdates = true;
         }
 
         /// <summary>The window's list panel as first designed: a light tint over the frosted field.</summary>
@@ -122,6 +123,14 @@ namespace NoReturnGuardian.Core
         public string LastRestoredSnapshotId { get; set; }
         /// <summary>How much of the shader field shows through the list panel, 0 (opaque) to 100 (frosting only).</summary>
         public int PanelTransparency { get; set; }
+        /// <summary>Ask GitHub at most once a day whether a newer release exists; only ever tells, never downloads.</summary>
+        public bool CheckForUpdates { get; set; }
+        /// <summary>The newest published release seen by the last successful check, as major.minor.patch.</summary>
+        public string LatestRelease { get; set; }
+        /// <summary>When the last check succeeded (UTC, round-trip format).</summary>
+        public string LastUpdateCheckUtc { get; set; }
+        /// <summary>The release the tray has already announced, so each version is announced once.</summary>
+        public string AnnouncedRelease { get; set; }
     }
 
     public sealed class SnapshotFileEntry

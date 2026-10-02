@@ -17,6 +17,7 @@ namespace NoReturnGuardian
         private readonly Icon _guarding;
         private readonly Icon _alert;
         private readonly Icon _idle;
+        private Action _balloonClicked;
 
         public GuardianTray(Action open, Action protect, Action exit)
         {
@@ -50,6 +51,16 @@ namespace NoReturnGuardian
                 ContextMenuStrip = menu
             };
             _icon.DoubleClick += (sender, args) => open();
+            _icon.BalloonTipClicked += (sender, args) =>
+            {
+                Action clicked = _balloonClicked;
+                _balloonClicked = null;
+                if (clicked != null)
+                {
+                    clicked();
+                }
+            };
+            _icon.BalloonTipClosed += (sender, args) => _balloonClicked = null;
         }
 
         /// <summary>
@@ -72,8 +83,10 @@ namespace NoReturnGuardian
                 : Title + " · 最近保护 " + protectedRecord.CreatedUtc.ToLocalTime().ToString("HH:mm");
         }
 
-        public void Balloon(int milliseconds, string title, string text, ToolTipIcon icon)
+        public void Balloon(int milliseconds, string title, string text, ToolTipIcon icon, Action clicked = null)
         {
+            // 系统只有一个气泡位置，新气泡顶掉旧的；点击只算给最近这一个。
+            _balloonClicked = clicked;
             // 气泡正文有长度上限；说明都是一两句话，超长时截短而不是让系统拒绝显示。
             _icon.ShowBalloonTip(milliseconds, title ?? Title, text.Length > 200 ? text.Substring(0, 200) + "…" : text, icon);
         }

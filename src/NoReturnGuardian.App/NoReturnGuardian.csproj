@@ -62,6 +62,7 @@
     <Compile Include="IGuardianHost.cs" />
     <Compile Include="GuardianTray.cs" />
     <Compile Include="StartupEntry.cs" />
+    <Compile Include="UpdateCheck.cs" />
     <Compile Include="DiagnosticLog.cs" />
     <Compile Include="WarmRestoreDialog.cs" />
     <Compile Include="StateTranscript.cs" />

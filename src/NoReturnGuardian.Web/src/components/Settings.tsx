@@ -14,6 +14,8 @@ interface SettingsProps {
   /** 界面里正在预览的值；拖动时先于宿主的状态更新 */
   panelTransparency: number;
   onPanelTransparency: (value: number) => void;
+  onCheckUpdates: (value: boolean) => void;
+  onOpenRelease: () => void;
 }
 
 function shortAccount(name: string) {
@@ -22,9 +24,9 @@ function shortAccount(name: string) {
 
 export function Settings({
   state, onAutoProtect, onStartup, onChooseProfile, onOpenSaves, onOpenBackups, onAutoCleanup, onShowUndo,
-  panelTransparency, onPanelTransparency,
+  panelTransparency, onPanelTransparency, onCheckUpdates, onOpenRelease,
 }: SettingsProps) {
-  const { settings, library, profile } = state;
+  const { settings, library, profile, version } = state;
   return (
     <div className="settings">
       <div className="setting">
@@ -91,6 +93,26 @@ export function Settings({
           <span className="setting-hint">{library.scenes ? `${library.scenes} 份 · ` : ''}撤销恢复时用</span>
         </div>
         <Switch label="显示恢复前快照" checked={settings.showUndo} onChange={onShowUndo} />
+      </div>
+      <div className="setting">
+        <div className="setting-text">
+          <span className="setting-name">检查更新</span>
+          <span className="setting-hint">每天向 GitHub 查一次，只提示，不自动下载</span>
+        </div>
+        <Switch label="检查更新" checked={settings.checkUpdates} onChange={onCheckUpdates} />
+      </div>
+      <div className="setting">
+        <div className="setting-text">
+          <span className="setting-name">版本</span>
+          <span className="setting-hint">
+            {version.available ? `${version.current} · 有新版本 ${version.available}` : version.current}
+          </span>
+        </div>
+        {version.available && (
+          <div className="setting-buttons">
+            <Button variant="line" onClick={onOpenRelease}>下载页</Button>
+          </div>
+        )}
       </div>
     </div>
   );
