@@ -183,7 +183,9 @@ internal static class TestNativeRecoveryDialog
             Require(stopReason("run-left", false) != null && new[] { "run-left", "game-exited", "hideout-not-reached", "no-departure-captured" }
                 .All(reason => stopReason(reason, true) == null), "A protecting recorder's routine stops stay quiet");
             Require(stopReason("encounter-entered-without-capture", true).Contains("没有自动保存")
-                && stopReason("departure-not-protected: no-hideout-save-before-departure", true).Contains("还没写过兵营存档")
+                && stopReason("departure-not-protected: no-hideout-save-before-departure", true).Contains("手动保护")
+                && !stopReason("departure-not-protected: no-hideout-save-before-departure", true).Contains("拿补给")
+                && stopReason("departure-not-protected: opening-save-of-another-run", true).Contains("对不上")
                 && stopReason("departure-not-protected: hideout-save-missed-before-departure", true).Contains("没来得及")
                 && stopReason("departure-not-protected: departure_save_changed", true).Contains("核对没有通过")
                 && !stopReason("departure-not-protected: departure_save_changed", true).Contains("departure_save_changed"),

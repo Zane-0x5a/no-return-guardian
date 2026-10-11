@@ -550,7 +550,9 @@ namespace NoReturnGuardian
             switch (reason)
             {
                 case "no-hideout-save-before-departure":
-                    return prefix + "进兵营后游戏还没写过兵营存档（拿补给、交易都会存档），可以出发前手动保护。";
+                    return prefix + "出发前没有一份能确认属于这个兵营的存档。需要时可以在出发前手动保护。";
+                case "opening-save-of-another-run":
+                    return prefix + "开局存档和出发时的这一局对不上。";
                 case "hideout-save-in-progress-at-departure":
                 case "newest-hideout-save-not-frozen":
                 case "hideout-save-missed-before-departure":

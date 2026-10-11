@@ -318,7 +318,9 @@ namespace NoReturnGuardian.Core
         /// recorder froze the last settled hideout save in storage before the event and proved that the
         /// game wrote nothing else until its departure save; that copy goes through the same hot-capture
         /// gates as a manual save. Every working file must predate the event, and the copied R0A must be
-        /// exactly the bytes the recorder bound.
+        /// exactly the bytes the recorder bound. In a new run's first hideout the frozen save is the run's
+        /// opening save, either as working files or, once the game has moved it into its native slots, as
+        /// those exports, from which the working files are rebuilt first.
         /// </summary>
         public Result<SnapshotRecord> CaptureDeparturePreparation(
             string profilePath,
@@ -326,16 +328,18 @@ namespace NoReturnGuardian.Core
         {
             lock (_gate)
             {
+                string basis = departure == null ? null : departure.Basis ?? DepartureEvidence.PreDepartureSave;
                 if (departure == null
                     || departure.RouteIndex < 0
                     || departure.RouteIndex > DepartureEvidence.MaximumRouteIndex
                     || departure.ObservedUtc == default(DateTime)
                     || string.IsNullOrWhiteSpace(departure.RunSha256)
-                    || departure.RunSha256.Length != 64)
+                    || departure.RunSha256.Length != 64
+                    || !DepartureEvidence.IsPreparationBasis(basis))
                 {
                     return Result<SnapshotRecord>.Fail(
                         "departure_evidence_invalid",
-                        "A departure capture needs the observed route index, time and bound save hash.");
+                        "A departure capture needs the observed route index, time, bound save hash and basis.");
                 }
 
                 string stagingRoot = Path.GetFullPath(Path.Combine(StorageRoot, DepartureEvidence.StagingDirectoryName))
@@ -354,7 +358,163 @@ namespace NoReturnGuardian.Core
                         "A departure capture needs the recorder's frozen hideout save inside this storage.");
                 }
 
-                return CaptureHotWorkingState(staged, null, departure, Path.GetFullPath(profilePath));
+                if (!string.Equals(basis, DepartureEvidence.RunStartExport, StringComparison.Ordinal))
+                {
+                    return CaptureHotWorkingState(staged, null, departure, Path.GetFullPath(profilePath));
+                }
+
+                string rebuilt = null;
+                try
+                {
+                    Result<string> working = RebuildOpeningExport(staged);
+                    if (!working.Success)
+                    {
+                        return Result<SnapshotRecord>.Fail(working.Code, working.Message);
+                    }
+
+                    rebuilt = working.Value;
+                    return CaptureHotWorkingState(rebuilt, null, departure, Path.GetFullPath(profilePath));
+                }
+                finally
+                {
+                    if (rebuilt != null)
+                    {
+                        FileTools.TryDeleteDirectory(rebuilt);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// A new run's opening save that the game had already moved into its native slots. Rebuilds its working
+        /// envelope beside the frozen exports through the verified transforms, each file with its export's
+        /// timestamp, so the ordinary hot-capture gates read it as they would have read the working files.
+        /// </summary>
+        private static Result<string> RebuildOpeningExport(string staged)
+        {
+            string rebuilt = null;
+            bool done = false;
+            try
+            {
+                Result<RunStateDescriptor> inspected = RunStateProbe.Inspect(staged, true);
+                if (!inspected.Success)
+                {
+                    return Result<string>.Fail(inspected.Code, inspected.Message);
+                }
+
+                RunStateDescriptor source = inspected.Value;
+                if (!source.NativeExportCaptureReady || source.WorkingCaptureReady)
+                {
+                    return Result<string>.Fail(
+                        source.NativeExportCaptureStatus ?? "native_export_not_ready",
+                        "The frozen opening save is not a complete native export.");
+                }
+
+                if (!DepartureEvidence.IsRunStartCode(source.WorkingRunStateCode))
+                {
+                    return Result<string>.Fail(
+                        "departure_save_not_run_start",
+                        "The frozen export is not the run's opening save.");
+                }
+
+                Result<DecodedSlotPayload> run = RunSlotSynthesizer.DecodeNativeExport(
+                    SaveLayout.CombineUnderProfile(staged, SaveLayout.RunDataPath),
+                    SaveLayout.CombineUnderProfile(staged, SaveLayout.RunParamsPath),
+                    SaveLayout.CombineUnderProfile(staged, SaveLayout.RunIconPath));
+                if (!run.Success)
+                {
+                    return Result<string>.Fail(run.Code, run.Message);
+                }
+
+                Result<DecodedSlotPayload> profile = ProfileSlotCodec.DecodeNativeExport(
+                    SaveLayout.CombineUnderProfile(staged, SaveLayout.ProfileDataPath),
+                    SaveLayout.CombineUnderProfile(staged, SaveLayout.ProfileParamsPath),
+                    SaveLayout.CombineUnderProfile(staged, SaveLayout.ProfileIconPath));
+                if (!profile.Success)
+                {
+                    return Result<string>.Fail(profile.Code, profile.Message);
+                }
+
+                if (!string.Equals(run.Value.StateCode, source.WorkingRunStateCode, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(
+                        profile.Value.StateCode,
+                        source.ProfileSlotStateCode,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return Result<string>.Fail(
+                        "native_export_state_changed",
+                        "The frozen native export changed before reconstruction.");
+                }
+
+                rebuilt = staged.TrimEnd(Path.DirectorySeparatorChar) + ".working";
+                FileTools.TryDeleteDirectory(rebuilt);
+                foreach (string relativePath in SaveLayout.CommittedSlotFiles.Concat(new[] { SaveLayout.MarkerPath }))
+                {
+                    string from = SaveLayout.CombineUnderProfile(staged, relativePath);
+                    string to = SaveLayout.CombineUnderProfile(rebuilt, relativePath);
+                    Directory.CreateDirectory(Path.GetDirectoryName(to));
+                    FileTools.CopyShared(from, to);
+                    File.SetLastWriteTimeUtc(to, File.GetLastWriteTimeUtc(from));
+                }
+
+                DateTime runWritten = File.GetLastWriteTimeUtc(
+                    SaveLayout.CombineUnderProfile(staged, SaveLayout.RunDataPath));
+                DateTime profileWritten = File.GetLastWriteTimeUtc(
+                    SaveLayout.CombineUnderProfile(staged, SaveLayout.ProfileDataPath));
+                foreach (string relativePath in new[] { SaveLayout.GameRunPath, SaveLayout.GameRunBackupPath })
+                {
+                    string path = SaveLayout.CombineUnderProfile(rebuilt, relativePath);
+                    WritePayloadBytes(path, run.Value.RawBytes);
+                    File.SetLastWriteTimeUtc(path, runWritten);
+                }
+
+                foreach (string relativePath in new[] { SaveLayout.GameProfilePath, SaveLayout.GameProfileBackupPath })
+                {
+                    string path = SaveLayout.CombineUnderProfile(rebuilt, relativePath);
+                    WritePayloadBytes(path, profile.Value.RawBytes);
+                    File.SetLastWriteTimeUtc(path, profileWritten);
+                }
+
+                Result<bool> runVerified = RunSlotSynthesizer.VerifyNativeExport(
+                    SaveLayout.CombineUnderProfile(rebuilt, SaveLayout.GameRunPath),
+                    SaveLayout.CombineUnderProfile(staged, SaveLayout.RunDataPath),
+                    SaveLayout.CombineUnderProfile(staged, SaveLayout.RunParamsPath),
+                    SaveLayout.CombineUnderProfile(staged, SaveLayout.RunIconPath),
+                    source.WorkingRunStateCode);
+                if (!runVerified.Success)
+                {
+                    return Result<string>.Fail(runVerified.Code, runVerified.Message);
+                }
+
+                Result<bool> profileVerified = ProfileSlotCodec.VerifyWorkingExportHash(
+                    SaveLayout.CombineUnderProfile(rebuilt, SaveLayout.GameProfilePath),
+                    profile.Value.StateCode,
+                    profile.Value.ExportSha256);
+                if (!profileVerified.Success)
+                {
+                    return Result<string>.Fail(profileVerified.Code, profileVerified.Message);
+                }
+
+                done = true;
+                return Result<string>.Ok(
+                    rebuilt,
+                    "opening_export_rebuilt",
+                    "The opening save's working files were rebuilt from its native exports.");
+            }
+            catch (IOException exception)
+            {
+                return Result<string>.Fail("snapshot_io_failed", exception.Message);
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                return Result<string>.Fail("snapshot_access_denied", exception.Message);
+            }
+            finally
+            {
+                if (!done && rebuilt != null)
+                {
+                    FileTools.TryDeleteDirectory(rebuilt);
+                }
             }
         }
 
@@ -420,6 +580,14 @@ namespace NoReturnGuardian.Core
                         return Result<SnapshotRecord>.Fail(
                             "departure_save_not_before_event",
                             "The frozen hideout files were not all written before the observed departure.");
+                    }
+
+                    if (DepartureEvidence.IsRunStartBasis(departure.Basis)
+                        && !DepartureEvidence.IsRunStartCode(before.WorkingRunStateCode))
+                    {
+                        return Result<SnapshotRecord>.Fail(
+                            "departure_save_not_run_start",
+                            "A run-start departure capture must hold the run's opening save.");
                     }
                 }
 
@@ -579,7 +747,7 @@ namespace NoReturnGuardian.Core
                         ? null
                         : departure.ObservedUtc.ToUniversalTime().ToString("O"),
                     DepartureRunSha256 = departure == null ? null : departure.RunSha256.ToLowerInvariant(),
-                    DepartureBasis = departure == null ? null : DepartureEvidence.PreDepartureSave,
+                    DepartureBasis = departure == null ? null : departure.Basis ?? DepartureEvidence.PreDepartureSave,
                     Marker = ReadPayloadMarker(pendingPath, entries),
                     RunStateCode = before.WorkingRunStateCode,
                     RunDataLength = entries.First(item => string.Equals(

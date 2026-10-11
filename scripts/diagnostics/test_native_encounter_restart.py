@@ -1,19 +1,24 @@
 import contextlib
+import hashlib
 import io
 import itertools
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest import mock
 
+from local_evidence import evidence, requires
 from NativeCheckpointProbe import ProbeError
 from NativeCodeSignature import VERIFIED_SHA256
 from NativeDepartureRecord import departure_slots, load_departure, write_departure
-from NativeDepartureRecorder import record_departure
-from NativeDepartureStage import STAGE_FILES, WORKING_FILES, HideoutStage, protect_departure
+from NativeDepartureRecorder import filetime_ns, record_departure
+from NativeDepartureStage import (EXPORT_FILES, STAGE_FILES, WORKING_FILES, HideoutStage, exported_raw,
+                                  opening_code, protect_departure, run_code, run_save)
 from NativeEncounterRestart import (AttachedSession, CONTROL_RVAS, abandon_encounter, arm_decision,
                                     redeploy_departure, replay_in_hideout, same_encounter)
 from NativeCheckpointTrigger import IN_HIDEOUT, RecoveryRequest, arguments, resolve_entry, supervised_main
@@ -334,6 +339,8 @@ class EntryTests(unittest.TestCase):
 
 
 class RecorderTests(unittest.TestCase):
+    basis = 'pre_departure_save'
+
     def hideout(self, word=2, active=1):
         return {'runActive': active, 'runInitialized': 1, 'story': 2, 'task': '0x9000', 'taskWord': word}
 
@@ -348,8 +355,8 @@ class RecorderTests(unittest.TestCase):
         states = [*before_armed, self.hideout(), *watched, *([arrival] if arrival else [])]
         self.protected = []
 
-        def publish(storage, profile, index, observed_ms, digest, staged):
-            self.protected.append((profile.name, index, observed_ms, digest, staged))
+        def publish(storage, profile, index, observed_ms, digest, staged, basis):
+            self.protected.append((profile.name, index, observed_ms, digest, staged, basis))
             return {'id': protect(), 'kind': 'departure', 'runSha256': digest, 'routeIndex': index, 'verified': True}
 
         test = self
@@ -357,21 +364,23 @@ class RecorderTests(unittest.TestCase):
         class Stage:
             """Stands in for the frozen hideout save; `protect` decides whether binding it succeeds."""
 
-            def __init__(self, storage, profile, playable, not_before_ns):
+            def __init__(self, storage, profile, playable, not_before_ns, birth_ns=None):
                 test.stage = self
-                self.polls, self.closed = 0, False
+                self.polls, self.closed, self.birth_ns = 0, False, birth_ns
 
             def poll(self):
                 self.polls += 1
 
             def bind(self, observed_ms, workers, cancelled):
-                return {'sha256': BOUND, 'path': Path('frozen'), 'savedAtNs': (observed_ms - 4000) * 1_000_000}
+                return {'basis': test.basis, 'sha256': BOUND, 'path': Path('frozen'),
+                        'savedAtNs': (observed_ms - 4000) * 1_000_000}
 
             def close(self):
                 self.closed = True
 
         def control(session, configuration, record, timeout, cancel=None):
             self.configuration = configuration
+            self.polls_before_control = getattr(self, 'stage', None) and self.stage.polls
             self.cancelled = [cancel() for _ in watched]
             return events, []
 
@@ -456,12 +465,29 @@ class RecorderTests(unittest.TestCase):
                 saved = self.departures['departure-new']
                 self.assertEqual((saved['snapshotId'], saved['autoProtected'], saved['routeIndex'], saved['slots']),
                                  ('departure-new', True, 3, BOARD))
-                self.assertEqual(self.protected, [('profile', 3, OBSERVED_MS, BOUND, Path('frozen'))])
+                self.assertEqual(self.protected, [('profile', 3, OBSERVED_MS, BOUND, Path('frozen'),
+                                                   'pre_departure_save')])
                 kinds = [entry['kind'] for entry in log]
                 self.assertLess(kinds.index('departure-protected'), kinds.index('departure-recorded'))
                 bound = next(entry for entry in log if entry['kind'] == 'departure-save-bound')
                 self.assertEqual((bound['basis'], bound['savedAtMs']), ('pre_departure_save', OBSERVED_MS - 4000))
                 self.assertTrue(self.stage.closed)
+
+    def test_a_run_opening_save_is_published_under_its_own_basis(self):
+        self.basis = 'run_start_export'
+        code, log, _ = self.record(self.captured(), arrival=self.hideout(word=1), snapshot=None, protecting=True,
+                                   protect=lambda: 'departure-new')
+        self.assertEqual(code, 0)
+        self.assertEqual(self.protected[0][-1], 'run_start_export')
+        bound = next(entry for entry in log if entry['kind'] == 'departure-save-bound')
+        self.assertEqual(bound['basis'], 'run_start_export')
+        self.assertTrue(self.departures['departure-new']['autoProtected'])
+
+    def test_the_stage_looks_once_before_the_probe_is_attached_with_the_game_birth(self):
+        self.record(self.captured(), arrival=self.hideout(word=1), protecting=True, protect=lambda: 'departure-new')
+        self.assertEqual(self.polls_before_control, 1)
+        self.assertEqual(self.stage.birth_ns, filetime_ns(22))
+        self.assertEqual(filetime_ns(116444736000000000 + 10), 1000)
 
     def test_a_recorder_without_a_profile_freezes_nothing(self):
         self.stage = None
@@ -471,7 +497,7 @@ class RecorderTests(unittest.TestCase):
     def test_the_hideout_is_watched_for_saves_while_waiting_for_the_departure(self):
         self.record(self.captured(), watched=[self.hideout()] * 3, arrival=self.hideout(word=1), protecting=True,
                     protect=lambda: 'departure-new')
-        self.assertEqual(self.stage.polls, 3)
+        self.assertEqual(self.stage.polls, 1 + 3)
 
     def test_an_unprotected_departure_falls_back_to_its_owner_or_records_nothing(self):
         def missed():
@@ -486,6 +512,19 @@ class RecorderTests(unittest.TestCase):
         self.assertEqual((code, self.departures), (4, {}))
         self.assertEqual(log[-2], {'kind': 'departure-recorder-stopped',
                                    'reason': 'departure-not-protected: departure-save-not-observed'})
+
+    def test_an_unprotected_departure_stops_the_recorder_only_inside_its_encounter(self):
+        """Guardian starts the next watcher as soon as this one stops; in the departing hideout it would arm and
+        then report the same departure as one it never saw (2026-10-10, 2026-10-11)."""
+        def missed():
+            raise ProbeError('no-hideout-save-before-departure')
+
+        with mock.patch('NativeDepartureRecorder.await_arrival', return_value=None) as arrival:
+            code, log, _ = self.record(self.captured(), snapshot=None, protecting=True, protect=missed)
+        self.assertEqual(code, 4)
+        self.assertEqual(arrival.call_count, 1)
+        self.assertEqual(log[-2]['reason'], 'departure-not-protected: no-hideout-save-before-departure')
+        self.assertTrue(self.stage.closed)
 
     def test_a_game_exit_stops_the_recorder_quietly_even_when_it_fails_a_read_first(self):
         stopped = lambda log: next(entry for entry in log if entry['kind'] == 'departure-recorder-stopped')
@@ -648,8 +687,15 @@ class HideoutStageTests(unittest.TestCase):
         with mock.patch('NativeDepartureStage.subprocess.run', run):
             self.code, self.receipt = 0, receipt
             self.assertEqual(protect_departure(Path('S'), Path('P'), 3, OBSERVED_MS, BOUND, Path('F')), receipt)
-            self.assertEqual(calls[0][1:], ['S', 'P', '3', str(OBSERVED_MS), BOUND, 'F'])
+            self.assertEqual(calls[0][1:], ['S', 'P', '3', str(OBSERVED_MS), BOUND, 'F', 'pre_departure_save'])
             self.assertTrue(calls[0][0].endswith('CaptureDepartureSnapshot.exe'))
+            self.receipt = {**receipt, 'basis': 'run_start_export'}
+            self.assertEqual(protect_departure(Path('S'), Path('P'), 3, OBSERVED_MS, BOUND, Path('F'),
+                                               'run_start_export'), self.receipt)
+            self.assertEqual(calls[-1][-1], 'run_start_export')
+            with self.assertRaisesRegex(ProbeError, 'incomplete'):
+                protect_departure(Path('S'), Path('P'), 3, OBSERVED_MS, BOUND, Path('F'), 'run_start_save')
+            self.receipt = receipt
             for variant in (dict(runSha256='cd' * 32), dict(kind='manual'), dict(verified=False), dict(routeIndex=4),
                             dict(id='../escape'), dict(basis=None)):
                 with self.subTest(variant=variant), self.assertRaisesRegex(ProbeError, 'incomplete'):
@@ -658,6 +704,231 @@ class HideoutStageTests(unittest.TestCase):
             self.code = 4
             with self.assertRaisesRegex(ProbeError, 'departure_save_changed'):
                 protect_departure(Path('S'), Path('P'), 3, OBSERVED_MS, BOUND, Path('F'))
+
+
+def opening(seconds, run, word='00800000'):
+    """A working R0A as far as the stage reads it: the observed header, the description with its state code at
+    the observed offset, and, for the stand-in identity check, the run after it."""
+    description = f'无章节名\n{seconds} 秒\n[042EFF03{word}{seconds:08X}]'.encode('utf-8')
+    return b'\x93\xea' + bytes(1442) + description + b'\0run=' + run.encode('ascii') + b';'
+
+
+def exported(raw):
+    """The native slot form of a working R0A (header bit cleared, checksum field and zero footer)."""
+    return b'\x92' + raw[1:] + bytes(36)
+
+
+def identity(raw):
+    return {'code': run_code(raw), 'run': re.search(rb'run=(\w+);', raw).group(1).decode('ascii')}
+
+
+class OpeningSaveTests(unittest.TestCase):
+    """A new run's first hideout: the hub's opening save predates the recorder's first sight of it. It is frozen
+    when this game process wrote it, it is the newest save and its play time is within the opening second, from
+    the working files or, once the game has moved it into its native slots, from those exports. It binds only
+    when the save the game writes at the departure belongs to the same run."""
+
+    BIRTH_MS = OBSERVED_MS - 120_000
+    OPENED_MS = OBSERVED_MS - 30_000
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        root = Path(self.directory.name)
+        self.storage, self.profile = root / 'storage', root / 'profile'
+        self.storage.mkdir()
+        # The recorder arrives in the hideout long after the opening save; the player departs soon after.
+        self.clock = [OBSERVED_MS / 1000 - 5]
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def stage(self, birth_ms=BIRTH_MS, inspect=identity):
+        return HideoutStage(self.storage, self.profile, lambda: True, (OBSERVED_MS - 6_000) * 1_000_000,
+                            birth_ns=None if birth_ms is None else birth_ms * 1_000_000,
+                            clock=lambda: self.clock[0], inspect=inspect)
+
+    def write(self, name, data, at_ms):
+        path = self.profile / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        os.utime(path, ns=(at_ms * 1_000_000,) * 2)
+
+    def working(self, raw, at_ms, slot_ms=None):
+        for name in WORKING_FILES:
+            self.write(name, raw if 'R0A' in name else b'profile' if '0P' in name else b'marker', at_ms)
+        for name in STAGE_FILES[len(WORKING_FILES):]:
+            # The run slot may still hold an older export; the working files are what is frozen.
+            self.write(name, b'older slot ' + name.encode('ascii'), self.BIRTH_MS - 60_000 if slot_ms is None
+                       else slot_ms)
+
+    def exports(self, raw, at_ms):
+        for name in WORKING_FILES[:4]:
+            (self.profile / name).unlink(missing_ok=True)
+        self.write('gamedata/nr.bin', b'marker', at_ms)
+        self.write('savedata/SAVEFILER0A/USR-DATA', exported(raw), at_ms)
+        self.write('savedata/SAVEFILER0A/params.json', b'{"detail": "opening"}', at_ms)
+        self.write('savedata/SAVEFILE0P/USR-DATA', b'profile export', at_ms)
+        self.write('savedata/SAVEFILE0P/params.json', b'{"detail": "profile"}', at_ms)
+        # Icon identifiers are rewritten rarely and say nothing about when the export was written.
+        self.write('savedata/SAVEFILER0A/ICN-ID', b'icon', self.BIRTH_MS - 86_400_000)
+        self.write('savedata/SAVEFILE0P/ICN-ID', b'icon', self.BIRTH_MS - 86_400_000)
+
+    def departing(self, raw):
+        """time.sleep inside bind: the game writes its departure save after the event."""
+        def sleep(seconds):
+            for name in WORKING_FILES:
+                self.write(name, raw if 'R0A' in name else b'profile-2' if '0P' in name else b'marker-2',
+                           OBSERVED_MS + 300)
+        return mock.patch('NativeDepartureStage.time.sleep', sleep)
+
+    def test_an_opening_save_from_before_the_first_sight_is_frozen_on_the_first_look(self):
+        raw = opening(1, 'runA')
+        self.working(raw, self.OPENED_MS)
+        stage = self.stage()
+        stage.poll()
+        self.assertEqual(stage.staged['basis'], 'run_start_save')
+        self.assertEqual(stage.staged['sha256'], hashlib.sha256(raw).hexdigest())
+        for name in STAGE_FILES:
+            self.assertEqual((stage.staged['path'] / name).read_bytes(), (self.profile / name).read_bytes())
+        with self.departing(opening(11, 'runA')):
+            self.assertIs(stage.bind(OBSERVED_MS, [0, 0, 0], lambda: False), stage.staged)
+
+    def test_a_departure_save_of_another_run_binds_nothing(self):
+        self.working(opening(1, 'runA'), self.OPENED_MS)
+        stage = self.stage()
+        stage.poll()
+        with self.departing(opening(11, 'runB')), self.assertRaisesRegex(ProbeError, 'opening-save-of-another-run'):
+            stage.bind(OBSERVED_MS, [0, 0, 0], lambda: False)
+
+    def test_only_an_opening_save_this_game_wrote_is_frozen(self):
+        cases = {
+            'past the opening second': (opening(2, 'runA'), self.OPENED_MS, self.BIRTH_MS),
+            'written before this game started': (opening(1, 'runA'), self.BIRTH_MS - 10_000, self.BIRTH_MS),
+            'unrecognized word': (opening(1, 'runA', word='00800002'), self.OPENED_MS, self.BIRTH_MS),
+            'not a run save': (b'encounter save', self.OPENED_MS, self.BIRTH_MS),
+            'no game birth given': (opening(1, 'runA'), self.OPENED_MS, None),
+        }
+        for case, (raw, at_ms, birth_ms) in cases.items():
+            with self.subTest(case=case):
+                self.tearDown()
+                self.setUp()
+                self.working(raw, at_ms)
+                stage = self.stage(birth_ms)
+                for _ in range(3):
+                    self.clock[0] += 0.4
+                    stage.poll()
+                self.assertIsNone(stage.staged)
+                with self.assertRaisesRegex(ProbeError, 'no-hideout-save-before-departure'):
+                    stage.bind(OBSERVED_MS, [0, 0, 0], lambda: False)
+
+    def test_a_ruled_out_save_is_read_once(self):
+        self.working(opening(2, 'runA'), self.OPENED_MS)
+        stage = self.stage()
+        with mock.patch('NativeDepartureStage.run_code', wraps=run_code) as read:
+            for _ in range(5):
+                self.clock[0] += 0.4
+                stage.poll()
+        self.assertEqual(read.call_count, 1)
+
+    def test_an_opening_save_already_in_the_native_slots_is_frozen_from_its_exports(self):
+        raw = opening(1, 'runA')
+        self.exports(raw, self.OPENED_MS)
+        stage = self.stage()
+        stage.poll()
+        staged = stage.staged
+        self.assertEqual(staged['basis'], 'run_start_export')
+        self.assertEqual(staged['sha256'], hashlib.sha256(exported_raw(exported(raw))).hexdigest())
+        self.assertEqual(exported_raw(exported(raw)), raw)
+        self.assertEqual(sorted(str(path.relative_to(staged['path'])).replace(os.sep, '/')
+                                for path in staged['path'].rglob('*') if path.is_file()), sorted(EXPORT_FILES))
+        with self.departing(opening(11, 'runA')):
+            self.assertIs(stage.bind(OBSERVED_MS, [0, 0, 0], lambda: False), staged)
+
+    def test_a_working_save_written_before_the_departure_unbinds_an_opening_export(self):
+        self.exports(opening(1, 'runA'), self.OPENED_MS)
+        stage = self.stage()
+        stage.poll()
+        self.assertEqual(stage.staged['basis'], 'run_start_export')
+        # A hideout save finished between the last poll and the event, then overwritten by the departure save.
+        self.working(opening(5, 'runA'), OBSERVED_MS - 20, slot_ms=self.OPENED_MS)
+        with self.departing(opening(11, 'runA')), \
+                self.assertRaisesRegex(ProbeError, 'hideout-save-missed-before-departure'):
+            stage.bind(OBSERVED_MS, [0, 0, 0], lambda: False)
+
+    def test_a_hideout_save_after_the_first_sight_replaces_the_opening_save(self):
+        self.working(opening(1, 'runA'), self.OPENED_MS)
+        stage = self.stage()
+        stage.poll()
+        self.assertEqual(stage.staged['basis'], 'run_start_save')
+        opened = stage.staged['path']
+        self.working(b'hideout save', OBSERVED_MS - 2_000)
+        for _ in range(2):
+            self.clock[0] += 0.4
+            stage.poll()
+        self.assertEqual(stage.staged['basis'], 'pre_departure_save')
+        self.assertFalse(opened.exists())
+        # No run identity is needed for a save the recorder saw written in this hideout.
+        with self.departing(b'departure save'):
+            self.assertEqual(stage.bind(OBSERVED_MS, [0, 0, 0], lambda: False)['basis'], 'pre_departure_save')
+
+
+EVIDENCE = 'native-runtime-20260912/collection-insurance-storage/snapshots/'
+OPENING = EVIDENCE + '20260912-054606257-manual-a79e6ade/payload/'  # a run's opening save (1 s)
+SAME_RUN = EVIDENCE + '20260912-060330291-manual-4e66bbe8/payload/'  # the same first hideout at 8 s
+OTHER_RUN = EVIDENCE + '20260912-072519061-manual-62fed724/payload/'  # another run's opening save
+
+
+@requires(OPENING, SAME_RUN, OTHER_RUN)
+class OpeningSaveEvidenceTests(unittest.TestCase):
+    """Real 2026-09-12 hideout captures: two of one run, one of another."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        root = Path(self.directory.name)
+        self.storage, self.profile = root / 'storage', root / 'profile'
+        self.storage.mkdir()
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def test_real_opening_saves_carry_their_run(self):
+        opening_raw = evidence(OPENING + 'gamedata/R0A.save').read_bytes()
+        same = evidence(SAME_RUN + 'gamedata/R0A.save').read_bytes()
+        other = evidence(OTHER_RUN + 'gamedata/R0A.save').read_bytes()
+        self.assertEqual(run_code(opening_raw), '042EFF030080000000000001')
+        self.assertTrue(opening_code(run_code(opening_raw)))
+        self.assertFalse(opening_code(run_code(same)), 'eight seconds into the hideout is past the opening save')
+        self.assertEqual(run_save(opening_raw)['run'], run_save(same)['run'])
+        self.assertNotEqual(run_save(opening_raw)['run'], run_save(other)['run'])
+        self.assertEqual(exported_raw(evidence(OTHER_RUN + 'savedata/SAVEFILER0A/USR-DATA').read_bytes()), other)
+
+    def test_a_real_opening_save_binds_only_to_a_save_of_its_run(self):
+        for departure, reason in ((SAME_RUN, None), (OTHER_RUN, 'opening-save-of-another-run')):
+            with self.subTest(departure=departure):
+                for name in STAGE_FILES:
+                    path = self.profile / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(evidence(OPENING + name), path)
+                    os.utime(path, ns=((OBSERVED_MS - 30_000) * 1_000_000,) * 2)
+                stage = HideoutStage(self.storage, self.profile, lambda: True, (OBSERVED_MS - 6_000) * 1_000_000,
+                                     birth_ns=(OBSERVED_MS - 120_000) * 1_000_000,
+                                     clock=lambda: OBSERVED_MS / 1000 - 5)
+                stage.poll()
+                self.assertEqual(stage.staged['basis'], 'run_start_save')
+
+                def sleep(seconds):
+                    for name in WORKING_FILES:
+                        path = self.profile / name
+                        shutil.copyfile(evidence(departure + name), path)
+                        os.utime(path, ns=((OBSERVED_MS + 300) * 1_000_000,) * 2)
+
+                with mock.patch('NativeDepartureStage.time.sleep', sleep):
+                    if reason is None:
+                        self.assertIs(stage.bind(OBSERVED_MS, [0, 0, 0], lambda: False), stage.staged)
+                    else:
+                        with self.assertRaisesRegex(ProbeError, reason):
+                            stage.bind(OBSERVED_MS, [0, 0, 0], lambda: False)
+                stage.close()
 
 
 class WorkerRedeployTests(unittest.TestCase):
