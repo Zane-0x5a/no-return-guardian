@@ -3,9 +3,10 @@
 Guardian starts it after an explicit protect or a native recovery of a preparation, or, with 出发自动保存,
 whenever the game has run for a minute. It arms only in a playable hideout, installs one read-only probe on
 the broadcast core, and writes the first `player-next-task` event's slots once the encounter is entered
-(NativeDepartureRecord). With a profile it also freezes the hideout's saves and publishes the one before the
-departure as a new preparation, which then owns the record (NativeDepartureStage). Guardian closes the
-recorder's stdin to ask for a clean detach; every stop is written to the log with its reason.
+(NativeDepartureRecord). With a profile it also freezes the hideout's saves, a new run's opening save
+included, and publishes the one before the departure as a new preparation, which then owns the record
+(NativeDepartureStage). Guardian closes the recorder's stdin to ask for a clean detach; every stop is written
+to the log with its reason.
 """
 
 import argparse
@@ -21,7 +22,7 @@ import traceback
 from NativeCheckpointProbe import FRIDA_DEPS, ProbeError, ReadOnlyProcess, verify_build
 from NativeCheckpointTrigger import fingerprints, process_birth, verify_live
 from NativeDepartureRecord import departure_path, departure_slots, new_departure, write_departure
-from NativeDepartureStage import PRE_DEPARTURE_SAVE, HideoutStage, protect_departure
+from NativeDepartureStage import HideoutStage, protect_departure
 from NativeEncounterRestart import (arm_decision, code_restored, control_configuration, hideout_state,
                                     run_control, save_workers, task_identity)
 
@@ -45,6 +46,11 @@ def game_exited(process):
         return process is not None and process_birth(process) is None
     except ProbeError:
         return False
+
+
+def filetime_ns(filetime):
+    """A process creation time (100 ns ticks since 1601) on the clock of file timestamps."""
+    return (filetime - 116444736000000000) * 100
 
 
 def arguments(argv=None):
@@ -153,10 +159,10 @@ def protect(args, stage, captured, index, owner, stopping, record):
     try:
         # Bound straight away: the departure save overwrites the hideout save within a second.
         frozen = stage.bind(captured['time'], captured.get('workers'), stopping.is_set)
-        record({'kind': 'departure-save-bound', 'runSha256': frozen['sha256'], 'basis': PRE_DEPARTURE_SAVE,
+        record({'kind': 'departure-save-bound', 'runSha256': frozen['sha256'], 'basis': frozen['basis'],
                 'savedAtMs': frozen['savedAtNs'] // 1_000_000, 'eventMs': captured['time']})
         receipt = protect_departure(args.storage, args.profile, index, captured['time'], frozen['sha256'],
-                                    frozen['path'])
+                                    frozen['path'], frozen['basis'])
         record({'kind': 'departure-protected', 'snapshotId': receipt['id'], 'receipt': receipt})
         return receipt['id'], receipt['id']
     except (ProbeError, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
@@ -208,7 +214,14 @@ def record_departure(argv=None):
                     return (arm_decision(current) == 'arm' and current['runActive'] == 1 and
                             save_workers(process, base) == [0, 0, 0])
 
-                stage = HideoutStage(args.storage, args.profile, playable, time.time_ns())
+                stage = HideoutStage(args.storage, args.profile, playable, time.time_ns(),
+                                     birth_ns=filetime_ns(birth))
+                # A new run's opening save is already on disk when the recorder arrives in its first hideout,
+                # and the player may depart before the probe is attached: look once before attaching.
+                try:
+                    stage.poll()
+                except OSError as error:
+                    record({'kind': 'departure-stage-skipped', 'reason': str(error)})
             sys.path.insert(0, str(FRIDA_DEPS))
             import frida
 
@@ -224,7 +237,17 @@ def record_departure(argv=None):
             if captured is None:
                 raise Stopped(watch.reason or 'no-departure-captured')
             raw, index = departure_slots(captured.get('slots'), captured.get('count'))
-            owner, protected = protect(args, stage, captured, index, owner, stopping, record)
+            try:
+                owner, protected = protect(args, stage, captured, index, owner, stopping, record)
+            except Stopped as stop:
+                if not stop.reason.startswith('departure-not-protected'):
+                    raise
+                # Leave only once the encounter has started: a watcher Guardian starts while the hideout is still
+                # loading it would arm there and then report this departure as one it never saw.
+                session.detach()
+                session = None
+                await_arrival(process, base, birth, stopping)
+                raise
             session.detach()
             session = None
             arrival = await_arrival(process, base, birth, stopping)

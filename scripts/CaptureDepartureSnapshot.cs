@@ -6,8 +6,8 @@ using NoReturnGuardian.Core;
 
 /// <summary>
 /// Called by the departure recorder once it has proved that its frozen copy is the last hideout save the
-/// game finished before the route board's departure. Publishes that copy as a verified preparation only
-/// through the ordinary hot-capture gates.
+/// game finished before the route board's departure, or a new run's opening save in its first hideout.
+/// Publishes that copy as a verified preparation only through the ordinary hot-capture gates.
 /// </summary>
 internal static class CaptureDepartureSnapshot
 {
@@ -16,12 +16,12 @@ internal static class CaptureDepartureSnapshot
         Console.OutputEncoding = new UTF8Encoding(false);
         int routeIndex;
         long observedMs;
-        if (args.Length != 6
+        if (args.Length != 7
             || !int.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out routeIndex)
             || !long.TryParse(args[3], NumberStyles.None, CultureInfo.InvariantCulture, out observedMs))
         {
             Console.Error.WriteLine(
-                "Usage: CaptureDepartureSnapshot <storage-root> <profile-path> <route-index> <observed-unix-ms> <r0a-sha256> <staged-directory>");
+                "Usage: CaptureDepartureSnapshot <storage-root> <profile-path> <route-index> <observed-unix-ms> <r0a-sha256> <staged-directory> <basis>");
             return 2;
         }
 
@@ -37,7 +37,8 @@ internal static class CaptureDepartureSnapshot
             RouteIndex = routeIndex,
             ObservedUtc = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMilliseconds(observedMs),
             RunSha256 = args[4],
-            StagedPath = args[5]
+            StagedPath = args[5],
+            Basis = args[6]
         });
         if (!result.Success)
         {

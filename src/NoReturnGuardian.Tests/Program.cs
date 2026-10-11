@@ -24,6 +24,8 @@ namespace NoReturnGuardian.Tests
             new TestCase("hideout save frozen before the departure becomes a restorable departure preparation", TestDepartureCapture),
             new TestCase("save written while the game handled the departure only restarts its encounter", TestPostDepartureSaveOnlyRestarts),
             new TestCase("departure capture rejects stale, changed or unproven saves", TestDepartureCaptureRejected),
+            new TestCase("a new run's opening save, frozen as working files or native exports, restores its hideout", TestRunStartDepartureCapture),
+            new TestCase("a run-start departure capture must hold a run's opening save", TestRunStartDepartureRejected),
             new TestCase("departure evidence tampering or downgrade is rejected", TestDepartureEvidenceTamperingRejected),
             new TestCase("departure retention keeps manual points and drops old departure records", TestDepartureRetention),
             new TestCase("save mutation during copy is rejected", TestCaptureMutationRejected),
@@ -1496,6 +1498,171 @@ namespace NoReturnGuardian.Tests
                 Assert.Equal("run_generation_mixed", store.CaptureDeparturePreparation(workspace.Profile, mixed).Code);
                 Assert.Equal(0, store.ListSnapshots().Count);
                 Assert.False(Directory.EnumerateDirectories(store.SnapshotsRoot, ".pending-*").Any(), "pending capture leaked");
+            }
+        }
+
+        /// <summary>
+        /// What the recorder freezes when a new run's opening save has already moved into the native slots: the
+        /// two exports and the marker, timestamps and all, and no working files.
+        /// </summary>
+        private static DepartureEvidence OpeningExportOf(SnapshotStore store, string profile)
+        {
+            string staged = Path.Combine(
+                store.StorageRoot,
+                DepartureEvidence.StagingDirectoryName,
+                "recorder-" + Guid.NewGuid().ToString("N"));
+            foreach (string relativePath in SaveLayout.NativeExportSourceFiles)
+            {
+                string source = SaveLayout.CombineUnderProfile(profile, relativePath);
+                string target = SaveLayout.CombineUnderProfile(staged, relativePath);
+                Directory.CreateDirectory(Path.GetDirectoryName(target));
+                File.Copy(source, target);
+                File.SetLastWriteTimeUtc(target, File.GetLastWriteTimeUtc(source));
+            }
+
+            Result<DecodedSlotPayload> run = RunSlotSynthesizer.DecodeNativeExport(
+                SaveLayout.CombineUnderProfile(staged, SaveLayout.RunDataPath),
+                SaveLayout.CombineUnderProfile(staged, SaveLayout.RunParamsPath),
+                SaveLayout.CombineUnderProfile(staged, SaveLayout.RunIconPath));
+            Assert.True(run.Success, run.Message);
+            DateTime newest = SaveLayout.NativeExportSourceFiles.Max(path =>
+                File.GetLastWriteTimeUtc(SaveLayout.CombineUnderProfile(staged, path)));
+            return new DepartureEvidence
+            {
+                RouteIndex = 0,
+                ObservedUtc = newest.AddMilliseconds(200),
+                RunSha256 = FileTools.Sha256Bytes(run.Value.RawBytes),
+                StagedPath = staged,
+                Basis = DepartureEvidence.RunStartExport
+            };
+        }
+
+        private static bool RebuiltStageLeft(SnapshotStore store)
+        {
+            string staging = Path.Combine(store.StorageRoot, DepartureEvidence.StagingDirectoryName);
+            return Directory.Exists(staging) && Directory.EnumerateDirectories(staging, "*.working").Any();
+        }
+
+        /// <summary>
+        /// A new run's first hideout holds only the opening save the hub wrote while it opened (play time 1 s).
+        /// Frozen as working files it is captured like any frozen hideout save; frozen as the native exports the
+        /// game had already moved it into, its working files are rebuilt first and the slot the capture
+        /// synthesizes is the game's own export, byte for byte.
+        /// </summary>
+        private static void TestRunStartDepartureCapture()
+        {
+            using (TestWorkspace workspace = new TestWorkspace())
+            {
+                SyntheticSave.WriteComplete(workspace.Profile, "20244:1:0", 1);
+                SnapshotStore store = workspace.CreateStore();
+                Dictionary<string, byte[]> expected = SyntheticSave.ReadScope(workspace.Profile);
+                DepartureEvidence departure = DepartureOf(store, workspace.Profile);
+                departure.Basis = DepartureEvidence.RunStartSave;
+                SyntheticSave.WriteComplete(workspace.Profile, "20244:9:0", 9);
+                Result<SnapshotRecord> capture = store.CaptureDeparturePreparation(workspace.Profile, departure);
+                Assert.True(capture.Success, capture.Message);
+                Assert.Equal(DepartureEvidence.RunStartSave, capture.Value.Manifest.DepartureBasis);
+                Assert.Equal("hideout", SnapshotPolicy.Use(capture.Value));
+                Assert.True(store.VerifySnapshot(capture.Value.Manifest.Id, true).Success, "opening capture must verify");
+                Result<RestoreOutcome> restore = store.Restore(
+                    capture.Value.Manifest.Id,
+                    workspace.Profile,
+                    new FakeGameProbe(),
+                    null);
+                Assert.True(restore.Success, restore.Message);
+                SyntheticSave.AssertScopeEquals(workspace.Profile, expected);
+            }
+
+            using (TestWorkspace workspace = new TestWorkspace())
+            {
+                SyntheticSave.WriteComplete(workspace.Profile, "20244:1:0", 1);
+                byte[] raw = File.ReadAllBytes(SaveLayout.CombineUnderProfile(workspace.Profile, SaveLayout.GameRunPath));
+                byte[] profileRaw = File.ReadAllBytes(
+                    SaveLayout.CombineUnderProfile(workspace.Profile, SaveLayout.GameProfilePath));
+                byte[] slot = File.ReadAllBytes(SaveLayout.CombineUnderProfile(workspace.Profile, SaveLayout.RunDataPath));
+                SyntheticSave.MakeNativeExportOnly(workspace.Profile);
+                SnapshotStore store = workspace.CreateStore();
+                DepartureEvidence departure = OpeningExportOf(store, workspace.Profile);
+                // The departure save brings working files back into the live profile.
+                SyntheticSave.WriteComplete(workspace.Profile, "20244:9:0", 9);
+                Result<SnapshotRecord> capture = store.CaptureDeparturePreparation(workspace.Profile, departure);
+                Assert.True(capture.Success, capture.Message);
+                SnapshotManifest manifest = capture.Value.Manifest;
+                Assert.Equal(DepartureEvidence.RunStartExport, manifest.DepartureBasis);
+                Assert.Equal(SnapshotCaptureBases.HotSynthesizedState, manifest.CaptureBasis);
+                Assert.Equal(5, manifest.SchemaVersion);
+                Assert.Equal(0, manifest.DepartureRouteIndex.Value);
+                Assert.Equal(Path.GetFullPath(workspace.Profile), manifest.SourceProfilePath);
+                Assert.Equal("hideout", SnapshotPolicy.Use(capture.Value));
+                Assert.True(store.VerifySnapshot(manifest.Id, true).Success, "rebuilt opening capture must verify");
+                string payload = Path.Combine(capture.Value.DirectoryPath, "payload");
+                Assert.BytesEqual(raw, File.ReadAllBytes(SaveLayout.CombineUnderProfile(payload, SaveLayout.GameRunPath)));
+                Assert.BytesEqual(
+                    profileRaw,
+                    File.ReadAllBytes(SaveLayout.CombineUnderProfile(payload, SaveLayout.GameProfileBackupPath)));
+                Assert.BytesEqual(slot, File.ReadAllBytes(SaveLayout.CombineUnderProfile(payload, SaveLayout.RunDataPath)));
+                Assert.False(RebuiltStageLeft(store), "the rebuilt working files must not outlive the capture");
+
+                Result<RestoreOutcome> restore = store.Restore(manifest.Id, workspace.Profile, new FakeGameProbe(), null);
+                Assert.True(restore.Success, restore.Message);
+                Assert.BytesEqual(
+                    raw,
+                    File.ReadAllBytes(SaveLayout.CombineUnderProfile(workspace.Profile, SaveLayout.GameRunPath)));
+            }
+        }
+
+        private static void TestRunStartDepartureRejected()
+        {
+            using (TestWorkspace workspace = TestWorkspace.WithCompleteSave())
+            {
+                // Three seconds into the run: the hub may have changed since its opening save.
+                SnapshotStore store = workspace.CreateStore();
+                DepartureEvidence working = DepartureOf(store, workspace.Profile);
+                working.Basis = DepartureEvidence.RunStartSave;
+                Assert.Equal(
+                    "departure_save_not_run_start",
+                    store.CaptureDeparturePreparation(workspace.Profile, working).Code);
+
+                // Working files beside the frozen exports: not an opening save that left only its exports.
+                DepartureEvidence beside = DepartureOf(store, workspace.Profile);
+                beside.Basis = DepartureEvidence.RunStartExport;
+                Assert.Equal(
+                    "native_export_not_applicable",
+                    store.CaptureDeparturePreparation(workspace.Profile, beside).Code);
+
+                DepartureEvidence unknown = DepartureOf(store, workspace.Profile);
+                unknown.Basis = "after_departure";
+                Assert.Equal(
+                    "departure_evidence_invalid",
+                    store.CaptureDeparturePreparation(workspace.Profile, unknown).Code);
+
+                SyntheticSave.MakeNativeExportOnly(workspace.Profile);
+                DepartureEvidence export = OpeningExportOf(store, workspace.Profile);
+                Assert.Equal(
+                    "departure_save_not_run_start",
+                    store.CaptureDeparturePreparation(workspace.Profile, export).Code);
+                Assert.Equal(0, store.ListSnapshots().Count);
+                Assert.False(RebuiltStageLeft(store), "a refused export must leave no rebuilt working files");
+            }
+
+            using (TestWorkspace workspace = TestWorkspace.WithCompleteSave())
+            {
+                // A save from later in the run relabeled as an opening save restores nothing.
+                SnapshotStore store = workspace.CreateStore();
+                SnapshotRecord snapshot = store.CaptureDeparturePreparation(
+                    workspace.Profile,
+                    DepartureOf(store, workspace.Profile)).Value;
+                string manifestPath = Path.Combine(snapshot.DirectoryPath, "manifest.json");
+                SnapshotManifest relabeled = FileTools.ReadJson<SnapshotManifest>(manifestPath);
+                relabeled.DepartureBasis = DepartureEvidence.RunStartSave;
+                relabeled.ManifestSha256 = FileTools.ManifestHash(relabeled);
+                FileTools.WriteJsonAtomic(manifestPath, relabeled);
+                Result<SnapshotRecord> lookup = store.GetSnapshot(snapshot.Manifest.Id);
+                Assert.False(
+                    lookup.Success && SnapshotPolicy.IsRedeployablePreparation(lookup.Value),
+                    "a later save labeled as the run's opening save must not restore");
+                Assert.False(DepartureEvidence.IsRunStartCode("032EFF030080000000000002"), "two seconds is past the opening");
+                Assert.True(DepartureEvidence.IsRunStartCode("042EFF030080000000000000"), "the opening save at 0 s");
             }
         }
 

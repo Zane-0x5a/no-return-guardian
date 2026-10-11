@@ -57,6 +57,22 @@ namespace NoReturnGuardian.Core
         /// </summary>
         public const string PreDepartureSave = "pre_departure_save";
 
+        /// <summary>
+        /// A new run's first hideout: the hub writes its own opening save (run play time 0-1 s) while the hideout
+        /// opens and usually nothing else until the departure, so no save postdates the recorder's first sight of
+        /// it. The recorder froze that opening save, and the departure save carried the same run (2026-10-11).
+        /// </summary>
+        public const string RunStartSave = "run_start_save";
+
+        /// <summary>
+        /// The same opening save, which the game had already moved into its native slots (no working files left).
+        /// The working files are reconstructed from those exports through the verified transforms.
+        /// </summary>
+        public const string RunStartExport = "run_start_export";
+
+        /// <summary>The run play time, in the state code's last field, of every observed opening save.</summary>
+        public const uint RunStartMaximumSeconds = 1;
+
         public const string StagingDirectoryName = "departure-staging";
 
         public int RouteIndex { get; set; }
@@ -65,6 +81,35 @@ namespace NoReturnGuardian.Core
 
         /// <summary>The recorder's frozen copy of the profile files, under the storage's staging directory.</summary>
         public string StagedPath { get; set; }
+
+        /// <summary>Which save the recorder froze: <see cref="PreDepartureSave"/> unless it is a run's opening save.</summary>
+        public string Basis { get; set; }
+
+        /// <summary>A basis whose hideout can be restored: the save before the departure, or a run's opening save.</summary>
+        public static bool IsPreparationBasis(string basis)
+        {
+            return string.Equals(basis, PreDepartureSave, StringComparison.Ordinal) || IsRunStartBasis(basis);
+        }
+
+        public static bool IsRunStartBasis(string basis)
+        {
+            return string.Equals(basis, RunStartSave, StringComparison.Ordinal)
+                || string.Equals(basis, RunStartExport, StringComparison.Ordinal);
+        }
+
+        /// <summary>Whether a 24-digit state code is a run's opening save (play time within the opening second).</summary>
+        public static bool IsRunStartCode(string stateCode)
+        {
+            uint seconds;
+            return stateCode != null
+                && stateCode.Length == 24
+                && uint.TryParse(
+                    stateCode.Substring(16),
+                    System.Globalization.NumberStyles.AllowHexSpecifier,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out seconds)
+                && seconds <= RunStartMaximumSeconds;
+        }
     }
 
     public static class WorkingRunStateSignals
@@ -175,8 +220,9 @@ namespace NoReturnGuardian.Core
         public string DepartureObservedUtc { get; set; }
         public string DepartureRunSha256 { get; set; }
         /// <summary>
-        /// <see cref="DepartureEvidence.PreDepartureSave"/> for current captures. Absent on the first
-        /// departure captures, which bound the save the game wrote after the departure (see there).
+        /// <see cref="DepartureEvidence.PreDepartureSave"/> for current captures, or one of the run-start bases for
+        /// a new run's first hideout. Absent on the first departure captures, which bound the save the game wrote
+        /// after the departure (see there).
         /// </summary>
         public string DepartureBasis { get; set; }
         public bool Complete { get; set; }
@@ -234,10 +280,7 @@ namespace NoReturnGuardian.Core
                         PreparationConfirmations.UserConfirmedHideout,
                         StringComparison.Ordinal)
                     || DepartureEvidenceMatches(manifest)
-                    && string.Equals(
-                        manifest.DepartureBasis,
-                        DepartureEvidence.PreDepartureSave,
-                        StringComparison.Ordinal));
+                    && DepartureEvidence.IsPreparationBasis(manifest.DepartureBasis));
         }
 
         /// <summary>
@@ -294,7 +337,8 @@ namespace NoReturnGuardian.Core
 
         /// <summary>
         /// A departure capture is only a hot working-state copy whose R0A is the exact hideout save the
-        /// recorder bound when the route board's event was observed. Its basis says which save that was.
+        /// recorder bound when the route board's event was observed. Its basis says which save that was; a
+        /// run-start basis must hold a run's opening save.
         /// </summary>
         public static bool DepartureEvidenceMatches(SnapshotManifest manifest)
         {
@@ -336,7 +380,9 @@ namespace NoReturnGuardian.Core
                 && manifest.DepartureRunSha256.Length == 64
                 && string.Equals(manifest.DepartureRunSha256, run.Sha256, StringComparison.OrdinalIgnoreCase)
                 && (manifest.DepartureBasis == null
-                    || string.Equals(manifest.DepartureBasis, DepartureEvidence.PreDepartureSave, StringComparison.Ordinal));
+                    || string.Equals(manifest.DepartureBasis, DepartureEvidence.PreDepartureSave, StringComparison.Ordinal)
+                    || DepartureEvidence.IsRunStartBasis(manifest.DepartureBasis)
+                    && DepartureEvidence.IsRunStartCode(manifest.RunStateCode));
         }
 
         public static bool HasCoherentWorkingStateEvidence(SnapshotManifest manifest)
