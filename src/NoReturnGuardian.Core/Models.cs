@@ -215,6 +215,12 @@ namespace NoReturnGuardian.Core
         public bool WorkingProfileMirrorsMatch { get; set; }
         public string ProfileSlotStateCode { get; set; }
         public string ProfileSlotExportSha256 { get; set; }
+        /// <summary>
+        /// Hex of the captured 0P export's trailing 36 bytes, which the exported hash covers but the working file
+        /// cannot reproduce. Absent on captures before 2026-10-17, whose exports all carried the first observed
+        /// footer.
+        /// </summary>
+        public string ProfileSlotExportFooter { get; set; }
         public string DepartureEventSid { get; set; }
         public int? DepartureRouteIndex { get; set; }
         public string DepartureObservedUtc { get; set; }
@@ -225,6 +231,11 @@ namespace NoReturnGuardian.Core
         /// after the departure (see there).
         /// </summary>
         public string DepartureBasis { get; set; }
+        /// <summary>
+        /// Present when the captured run save had lost its trading-station stock and the stock of an earlier
+        /// save of the same draw was written back into Guardian's copy (see <see cref="VendorStockRepair"/>).
+        /// </summary>
+        public VendorStockRepair VendorStockRepair { get; set; }
         public bool Complete { get; set; }
         public string CompositeSha256 { get; set; }
         public string ManifestSha256 { get; set; }
@@ -378,7 +389,11 @@ namespace NoReturnGuardian.Core
                 && run != null
                 && !string.IsNullOrWhiteSpace(manifest.DepartureRunSha256)
                 && manifest.DepartureRunSha256.Length == 64
-                && string.Equals(manifest.DepartureRunSha256, run.Sha256, StringComparison.OrdinalIgnoreCase)
+                // The bound save is the copy before a lost trading-station stock was returned into it.
+                && string.Equals(
+                    manifest.DepartureRunSha256,
+                    manifest.VendorStockRepair == null ? run.Sha256 : manifest.VendorStockRepair.OriginalRunSha256,
+                    StringComparison.OrdinalIgnoreCase)
                 && (manifest.DepartureBasis == null
                     || string.Equals(manifest.DepartureBasis, DepartureEvidence.PreDepartureSave, StringComparison.Ordinal)
                     || DepartureEvidence.IsRunStartBasis(manifest.DepartureBasis)
@@ -524,6 +539,11 @@ namespace NoReturnGuardian.Core
         public string Detail { get; set; }
         public string StateCode { get; set; }
         public string ExportSha256 { get; set; }
+        /// <summary>
+        /// The export's trailing 36 bytes. The game leaves whatever its buffer held there (all zero, or the
+        /// tail of an earlier save); the CRC32C does not cover them, so they are kept rather than modeled.
+        /// </summary>
+        public byte[] Footer { get; set; }
     }
 
     public sealed class FileStamp

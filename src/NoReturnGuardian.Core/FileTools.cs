@@ -249,6 +249,20 @@ namespace NoReturnGuardian.Core
             }
         }
 
+        public static byte[] ReadAllBytesShared(string path)
+        {
+            using (FileStream stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete))
+            using (MemoryStream buffer = new MemoryStream())
+            {
+                stream.CopyTo(buffer, 1024 * 128);
+                return buffer.ToArray();
+            }
+        }
+
         public static string Sha256(string path, bool sharedRead)
         {
             FileShare share = sharedRead
@@ -330,6 +344,11 @@ namespace NoReturnGuardian.Core
             {
                 AppendCanonical(builder, "profileSlotState", manifest.ProfileSlotStateCode);
                 AppendCanonical(builder, "profileSlotExport", manifest.ProfileSlotExportSha256);
+                // Absent on earlier captures; they keep their original hash.
+                if (manifest.ProfileSlotExportFooter != null)
+                {
+                    AppendCanonical(builder, "profileSlotFooter", manifest.ProfileSlotExportFooter);
+                }
             }
             if (string.Equals(
                 manifest.PreparationConfirmation,
@@ -347,6 +366,17 @@ namespace NoReturnGuardian.Core
                 {
                     AppendCanonical(builder, "departureBasis", manifest.DepartureBasis);
                 }
+            }
+            // Absent unless a lost trading-station stock was returned; older manifests keep their hash.
+            if (manifest.VendorStockRepair != null)
+            {
+                AppendCanonical(builder, "vendorOriginalRun", manifest.VendorStockRepair.OriginalRunSha256);
+                AppendCanonical(builder, "vendorWitnessRun", manifest.VendorStockRepair.WitnessRunSha256);
+                AppendCanonical(builder, "vendorCount", manifest.VendorStockRepair.Count.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture));
+                AppendCanonical(builder, "vendorItems", string.Join(
+                    ",",
+                    manifest.VendorStockRepair.Items ?? new List<string>()));
             }
             AppendCanonical(builder, "marker", manifest.Marker);
             AppendCanonical(builder, "state", manifest.RunStateCode);
@@ -461,7 +491,7 @@ namespace NoReturnGuardian.Core
             }
         }
 
-        private static string ToHex(byte[] bytes)
+        internal static string ToHex(byte[] bytes)
         {
             StringBuilder builder = new StringBuilder(bytes.Length * 2);
             foreach (byte value in bytes)
@@ -470,6 +500,22 @@ namespace NoReturnGuardian.Core
             }
 
             return builder.ToString();
+        }
+
+        internal static byte[] FromHex(string text)
+        {
+            if (text == null || text.Length % 2 != 0 || !text.All(Uri.IsHexDigit))
+            {
+                return null;
+            }
+
+            byte[] bytes = new byte[text.Length / 2];
+            for (int index = 0; index < bytes.Length; index++)
+            {
+                bytes[index] = Convert.ToByte(text.Substring(index * 2, 2), 16);
+            }
+
+            return bytes;
         }
 
         private static void AppendCanonical(StringBuilder builder, string name, string value)
@@ -491,16 +537,11 @@ namespace NoReturnGuardian.Core
         private const int DetailOffset = 1444;
         private const int MaximumDetailBytes = 4096;
         private static readonly byte[] ExpectedIconId = { 0x01, 0x82, 0x9C, 0x01 };
+        // Guardian's own exports end in zeros. The game's exports end in whatever its buffer last held: zeros,
+        // 0101010105000000..., 288D4500... and more were all observed on 2026-10-16/17. The CRC32C stops before
+        // these bytes, so a native export is decoded with its own footer and must still round-trip exactly.
         private static readonly byte[] NativeZeroFooter =
             new byte[SaveLayout.SlotEnvelopeLength];
-        private static readonly byte[] NativeLegacyFooter =
-        {
-            0x01, 0x01, 0x01, 0x01, 0x05, 0x00, 0x00, 0x00,
-            0x05, 0x02, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00,
-            0x00, 0xC0, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x30, 0xC0, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00
-        };
         private static readonly uint[] Crc32CTable = BuildCrc32CTable();
 
         public static Result<RunSlotMetadata> Synthesize(
@@ -672,28 +713,20 @@ namespace NoReturnGuardian.Core
                 }
 
                 byte[] exported = File.ReadAllBytes(runDataPath);
+                byte[] footer = ObservedFooter(exported);
                 byte[] raw;
                 string detail;
                 string error;
                 if (!TryDecodeObservedExport(
                     exported,
-                    NativeZeroFooter,
+                    footer,
                     out raw,
                     out detail,
                     out error))
                 {
-                    string zeroFooterError = error;
-                    if (!TryDecodeObservedExport(
-                        exported,
-                        NativeLegacyFooter,
-                        out raw,
-                        out detail,
-                        out error))
-                    {
-                        return Result<DecodedSlotPayload>.Fail(
-                            "native_run_export_invalid",
-                            zeroFooterError + " " + error);
-                    }
+                    return Result<DecodedSlotPayload>.Fail(
+                        "native_run_export_invalid",
+                        error);
                 }
 
                 if (!string.Equals(detail, metadata.detail, StringComparison.Ordinal)
@@ -713,7 +746,8 @@ namespace NoReturnGuardian.Core
                         RawBytes = raw,
                         Detail = detail,
                         StateCode = stateCode,
-                        ExportSha256 = FileTools.Sha256Bytes(exported)
+                        ExportSha256 = FileTools.Sha256Bytes(exported),
+                        Footer = footer
                     },
                     "native_run_export_verified",
                     "The native R0A export round-trips to a verified working state.");
@@ -965,6 +999,23 @@ namespace NoReturnGuardian.Core
             return true;
         }
 
+        internal static byte[] ObservedFooter(byte[] exported)
+        {
+            if (exported == null || exported.Length < SaveLayout.SlotEnvelopeLength)
+            {
+                return null;
+            }
+
+            byte[] footer = new byte[SaveLayout.SlotEnvelopeLength];
+            Buffer.BlockCopy(
+                exported,
+                exported.Length - footer.Length,
+                footer,
+                0,
+                footer.Length);
+            return footer;
+        }
+
         internal static string ExtractStateCode(string detail)
         {
             if (string.IsNullOrWhiteSpace(detail))
@@ -1056,7 +1107,10 @@ namespace NoReturnGuardian.Core
     public static class ProfileSlotCodec
     {
         private static readonly byte[] ExpectedIconId = { 0x14, 0x4D, 0xB7, 0x5B };
-        private static readonly byte[] ExpectedFooter =
+        // The first observed 0P footer, which every capture before 2026-10-17 carried. Like the R0A footer it is
+        // buffer residue outside the CRC32C; later exports end in zeros, so only manifests without a recorded
+        // footer still fall back to this one.
+        private static readonly byte[] LegacyFooter =
         {
             0x6F, 0xD8, 0x1B, 0xBE, 0x45, 0x27, 0x34, 0x3F,
             0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00,
@@ -1095,12 +1149,13 @@ namespace NoReturnGuardian.Core
                 }
 
                 byte[] exported = File.ReadAllBytes(profileDataPath);
+                byte[] footer = RunSlotSynthesizer.ObservedFooter(exported);
                 byte[] raw;
                 string detail;
                 string error;
                 if (!RunSlotSynthesizer.TryDecodeObservedExport(
                     exported,
-                    ExpectedFooter,
+                    footer,
                     out raw,
                     out detail,
                     out error))
@@ -1127,7 +1182,8 @@ namespace NoReturnGuardian.Core
                         RawBytes = raw,
                         Detail = detail,
                         StateCode = stateCode,
-                        ExportSha256 = FileTools.Sha256Bytes(exported)
+                        ExportSha256 = FileTools.Sha256Bytes(exported),
+                        Footer = footer
                     },
                     "native_profile_export_verified",
                     "The native 0P export round-trips to a verified working state.");
@@ -1140,14 +1196,14 @@ namespace NoReturnGuardian.Core
             }
         }
 
-        public static Result<byte[]> BuildExport(byte[] raw)
+        public static Result<byte[]> BuildExport(byte[] raw, byte[] footer = null)
         {
             byte[] exported;
             string detail;
             string error;
             return RunSlotSynthesizer.TryBuildObservedExport(
                 raw,
-                ExpectedFooter,
+                footer ?? LegacyFooter,
                 out exported,
                 out detail,
                 out error)
@@ -1161,7 +1217,8 @@ namespace NoReturnGuardian.Core
         public static Result<bool> VerifyWorkingExportHash(
             string workingProfilePath,
             string expectedStateCode,
-            string expectedExportSha256)
+            string expectedExportSha256,
+            byte[] footer)
         {
             try
             {
@@ -1170,7 +1227,7 @@ namespace NoReturnGuardian.Core
                 string error;
                 if (!RunSlotSynthesizer.TryBuildObservedExport(
                     File.ReadAllBytes(workingProfilePath),
-                    ExpectedFooter,
+                    footer ?? LegacyFooter,
                     out exported,
                     out detail,
                     out error))

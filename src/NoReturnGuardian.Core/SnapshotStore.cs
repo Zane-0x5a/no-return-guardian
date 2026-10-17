@@ -9,6 +9,7 @@ namespace NoReturnGuardian.Core
     {
         private readonly object _gate = new object();
         private readonly IClock _clock;
+        private string _vendorObservedStamp;
 
         public SnapshotStore(string storageRoot, IClock clock)
         {
@@ -21,6 +22,7 @@ namespace NoReturnGuardian.Core
             SnapshotsRoot = Path.Combine(StorageRoot, "snapshots");
             DeparturesRoot = Path.Combine(StorageRoot, "departures");
             JournalPath = Path.Combine(StorageRoot, "restore-journal.json");
+            VendorWitnessPath = Path.Combine(StorageRoot, VendorStock.WitnessFileName);
             _clock = clock ?? new SystemClock();
             AutomaticRetention = 60;
             Directory.CreateDirectory(SnapshotsRoot);
@@ -31,8 +33,67 @@ namespace NoReturnGuardian.Core
         /// <summary>The departure recorder's per-snapshot route-board records; removed with their snapshot.</summary>
         public string DeparturesRoot { get; private set; }
         public string JournalPath { get; private set; }
+        public string VendorWitnessPath { get; private set; }
         public int AutomaticRetention { get; set; }
         public SnapshotHooks CaptureHooks { get; set; }
+
+        /// <summary>
+        /// Called by the read-only monitor. Remembers the newest settled working R0A whose trading-station stock
+        /// is not empty, so a later capture of the same visit can return the stock the game lost from its saves.
+        /// Reads the save only; a torn or unreadable read is skipped.
+        /// </summary>
+        public void ObserveVendorStock(string profilePath)
+        {
+            try
+            {
+                string path = SaveLayout.CombineUnderProfile(profilePath, SaveLayout.GameRunPath);
+                FileInfo before = new FileInfo(path);
+                if (!before.Exists)
+                {
+                    return;
+                }
+
+                string stamp = path + "|" + before.Length + "|" + before.LastWriteTimeUtc.Ticks;
+                if (string.Equals(stamp, _vendorObservedStamp, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                byte[] raw = FileTools.ReadAllBytesShared(path);
+                FileInfo after = new FileInfo(path);
+                if (!after.Exists
+                    || after.Length != before.Length
+                    || after.LastWriteTimeUtc != before.LastWriteTimeUtc
+                    || raw.Length != before.Length)
+                {
+                    return;
+                }
+
+                _vendorObservedStamp = stamp;
+                Result<VendorStockReading> reading = VendorStock.Read(raw);
+                if (!reading.Success || reading.Value.Count == 0)
+                {
+                    return;
+                }
+
+                lock (_gate)
+                {
+                    FileTools.WriteJsonAtomic(
+                        VendorWitnessPath,
+                        VendorStock.ToWitness(
+                            reading.Value,
+                            profilePath,
+                            FileTools.Sha256Bytes(raw),
+                            before.LastWriteTimeUtc));
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
 
         public Result<SnapshotRecord> Capture(string profilePath, CaptureOptions options)
         {
@@ -489,7 +550,8 @@ namespace NoReturnGuardian.Core
                 Result<bool> profileVerified = ProfileSlotCodec.VerifyWorkingExportHash(
                     SaveLayout.CombineUnderProfile(rebuilt, SaveLayout.GameProfilePath),
                     profile.Value.StateCode,
-                    profile.Value.ExportSha256);
+                    profile.Value.ExportSha256,
+                    profile.Value.Footer);
                 if (!profileVerified.Success)
                 {
                     return Result<string>.Fail(profileVerified.Code, profileVerified.Message);
@@ -615,6 +677,27 @@ namespace NoReturnGuardian.Core
                         PayloadPath(pendingPath, relativePath));
                 }
 
+                if (departure != null
+                    && !string.Equals(
+                        FileTools.Sha256(PayloadPath(pendingPath, SaveLayout.GameRunPath), false),
+                        departure.RunSha256,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return Result<SnapshotRecord>.Fail(
+                        "departure_save_changed",
+                        "The frozen R0A is not the hideout save the recorder bound.");
+                }
+
+                Result<VendorStockRepair> stock = ReturnLostVendorStock(
+                    pendingPath,
+                    recordedProfilePath ?? before.ProfilePath,
+                    sourceStamps);
+                if (!stock.Success)
+                {
+                    return Result<SnapshotRecord>.Fail(stock.Code, stock.Message);
+                }
+
+                VendorStockRepair repair = stock.Value;
                 Result<RunSlotMetadata> synthesis = RunSlotSynthesizer.Synthesize(
                     PayloadPath(pendingPath, SaveLayout.GameRunPath),
                     SaveLayout.CombineUnderProfile(profilePath, SaveLayout.RunParamsPath),
@@ -627,17 +710,6 @@ namespace NoReturnGuardian.Core
                     return Result<SnapshotRecord>.Fail(
                         synthesis.Code,
                         synthesis.Message);
-                }
-
-                if (departure != null
-                    && !string.Equals(
-                        FileTools.Sha256(PayloadPath(pendingPath, SaveLayout.GameRunPath), false),
-                        departure.RunSha256,
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    return Result<SnapshotRecord>.Fail(
-                        "departure_save_changed",
-                        "The frozen R0A is not the hideout save the recorder bound.");
                 }
 
                 if (CaptureHooks != null && CaptureHooks.AfterPayloadCopied != null)
@@ -678,10 +750,14 @@ namespace NoReturnGuardian.Core
                         string sourceHash = FileTools.Sha256(
                             SaveLayout.CombineUnderProfile(profilePath, relativePath),
                             true);
-                        string payloadHash = FileTools.Sha256(payload, false);
+                        // A returned stock changed only Guardian's copy of the run save; the copy itself must
+                        // still have been the live bytes.
+                        string copiedHash = repair != null && IsRunWorkingFile(relativePath)
+                            ? repair.OriginalRunSha256
+                            : FileTools.Sha256(payload, false);
                         if (!string.Equals(
                             sourceHash,
-                            payloadHash,
+                            copiedHash,
                             StringComparison.OrdinalIgnoreCase))
                         {
                             return Result<SnapshotRecord>.Fail(
@@ -748,6 +824,7 @@ namespace NoReturnGuardian.Core
                         : departure.ObservedUtc.ToUniversalTime().ToString("O"),
                     DepartureRunSha256 = departure == null ? null : departure.RunSha256.ToLowerInvariant(),
                     DepartureBasis = departure == null ? null : departure.Basis ?? DepartureEvidence.PreDepartureSave,
+                    VendorStockRepair = repair,
                     Marker = ReadPayloadMarker(pendingPath, entries),
                     RunStateCode = before.WorkingRunStateCode,
                     RunDataLength = entries.First(item => string.Equals(
@@ -819,6 +896,92 @@ namespace NoReturnGuardian.Core
                     FileTools.TryDeleteDirectory(publishedPath);
                 }
             }
+        }
+
+        /// <summary>
+        /// A continued run can lose the trading station's stock from its saves while the station itself keeps
+        /// it (see <see cref="VendorStockReading"/>). When the captured R0A records an empty stock and the
+        /// monitor's witness is an earlier save of the same run, the same completed encounters and the same
+        /// seed, the witness's stock is written back into both copied run mirrors. Returns null when nothing
+        /// is returned; the live save is never touched.
+        /// </summary>
+        private Result<VendorStockRepair> ReturnLostVendorStock(
+            string pendingPath,
+            string profilePath,
+            Dictionary<string, FileStamp> sourceStamps)
+        {
+            FileStamp runStamp;
+            if (!File.Exists(VendorWitnessPath)
+                || !sourceStamps.TryGetValue(SaveLayout.GameRunPath, out runStamp))
+            {
+                return Result<VendorStockRepair>.Ok(null, "vendor_stock_kept", "No stock witness is available.");
+            }
+
+            VendorStockWitness witness;
+            try
+            {
+                witness = FileTools.ReadJson<VendorStockWitness>(VendorWitnessPath);
+            }
+            catch (Exception exception) when (
+                exception is IOException
+                || exception is UnauthorizedAccessException
+                || exception is ArgumentException
+                || exception is InvalidOperationException)
+            {
+                return Result<VendorStockRepair>.Ok(null, "vendor_stock_kept", "The stock witness is unreadable.");
+            }
+
+            string runPath = PayloadPath(pendingPath, SaveLayout.GameRunPath);
+            string backupPath = PayloadPath(pendingPath, SaveLayout.GameRunBackupPath);
+            byte[] raw = File.ReadAllBytes(runPath);
+            Result<VendorStockReading> target = VendorStock.Read(raw);
+            if (!target.Success
+                || !VendorStock.WitnessRestores(
+                    witness,
+                    target.Value,
+                    profilePath,
+                    new DateTime(runStamp.LastWriteUtcTicks, DateTimeKind.Utc))
+                || !RunSlotSynthesizer.BytesEqual(raw, File.ReadAllBytes(backupPath)))
+            {
+                return Result<VendorStockRepair>.Ok(null, "vendor_stock_kept", "The captured stock is kept.");
+            }
+
+            byte[] repaired = VendorStock.Repair(raw, target.Value, witness);
+            Result<VendorStockReading> check = VendorStock.Read(repaired);
+            if (!check.Success
+                || !VendorStock.Holds(check.Value, witness.Count, witness.Items)
+                || !string.Equals(check.Value.RunId, target.Value.RunId, StringComparison.Ordinal)
+                || check.Value.CompletedEncounters != target.Value.CompletedEncounters
+                || !string.Equals(check.Value.Seed, target.Value.Seed, StringComparison.Ordinal))
+            {
+                return Result<VendorStockRepair>.Fail(
+                    "vendor_stock_repair_failed",
+                    "The returned trading-station stock did not read back.");
+            }
+
+            foreach (string path in new[] { runPath, backupPath })
+            {
+                DateTime written = File.GetLastWriteTimeUtc(path);
+                File.WriteAllBytes(path, repaired);
+                File.SetLastWriteTimeUtc(path, written);
+            }
+
+            return Result<VendorStockRepair>.Ok(
+                new VendorStockRepair
+                {
+                    OriginalRunSha256 = FileTools.Sha256Bytes(raw),
+                    WitnessRunSha256 = witness.SourceRunSha256.ToLowerInvariant(),
+                    Count = witness.Count,
+                    Items = witness.Items.Select(item => item.ToLowerInvariant()).ToList()
+                },
+                "vendor_stock_returned",
+                "The trading-station stock the game lost from this save was returned from an earlier save of the same visit.");
+        }
+
+        private static bool IsRunWorkingFile(string relativePath)
+        {
+            return string.Equals(relativePath, SaveLayout.GameRunPath, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(relativePath, SaveLayout.GameRunBackupPath, StringComparison.OrdinalIgnoreCase);
         }
 
         private Result<SnapshotRecord> CaptureNativeExportPreparation(
@@ -979,7 +1142,8 @@ namespace NoReturnGuardian.Core
                 Result<bool> profileVerification = ProfileSlotCodec.VerifyWorkingExportHash(
                     PayloadPath(pendingPath, SaveLayout.GameProfilePath),
                     profileDecode.Value.StateCode,
-                    profileDecode.Value.ExportSha256);
+                    profileDecode.Value.ExportSha256,
+                    profileDecode.Value.Footer);
                 if (!profileVerification.Success)
                 {
                     return Result<SnapshotRecord>.Fail(
@@ -1022,6 +1186,7 @@ namespace NoReturnGuardian.Core
                     WorkingProfileMirrorsMatch = true,
                     ProfileSlotStateCode = profileDecode.Value.StateCode,
                     ProfileSlotExportSha256 = profileDecode.Value.ExportSha256,
+                    ProfileSlotExportFooter = FileTools.ToHex(profileDecode.Value.Footer),
                     Complete = true,
                     Files = entries.OrderBy(
                         item => item.RelativePath,
@@ -2089,17 +2254,58 @@ namespace NoReturnGuardian.Core
 
                     if (nativeExport)
                     {
+                        string recordedFooter = record.Manifest.ProfileSlotExportFooter;
+                        byte[] footer = recordedFooter == null
+                            ? null
+                            : FileTools.FromHex(recordedFooter);
+                        if (recordedFooter != null
+                            && (footer == null || footer.Length != SaveLayout.SlotEnvelopeLength))
+                        {
+                            return Result<SnapshotRecord>.Fail(
+                                "snapshot_profile_footer_invalid",
+                                "The snapshot's recorded 0P export footer is malformed.");
+                        }
+
                         Result<bool> profileVerification =
                             ProfileSlotCodec.VerifyWorkingExportHash(
                                 PayloadPath(record.DirectoryPath, SaveLayout.GameProfilePath),
                                 record.Manifest.ProfileSlotStateCode,
-                                record.Manifest.ProfileSlotExportSha256);
+                                record.Manifest.ProfileSlotExportSha256,
+                                footer);
                         if (!profileVerification.Success)
                         {
                             return Result<SnapshotRecord>.Fail(
                                 profileVerification.Code,
                                 profileVerification.Message);
                         }
+                    }
+                }
+
+                VendorStockRepair repair = record.Manifest.VendorStockRepair;
+                if (repair != null)
+                {
+                    SnapshotFileEntry run = record.Manifest.Files.First(item => string.Equals(
+                        SaveLayout.NormalizeRelativePath(item.RelativePath),
+                        SaveLayout.GameRunPath,
+                        StringComparison.OrdinalIgnoreCase));
+                    Result<VendorStockReading> stock = VendorStock.Read(
+                        File.ReadAllBytes(PayloadPath(record.DirectoryPath, SaveLayout.GameRunPath)));
+                    if (!string.Equals(
+                            record.Manifest.CaptureBasis,
+                            SnapshotCaptureBases.HotSynthesizedState,
+                            StringComparison.OrdinalIgnoreCase)
+                        || string.IsNullOrWhiteSpace(repair.OriginalRunSha256)
+                        || repair.OriginalRunSha256.Length != 64
+                        || string.Equals(repair.OriginalRunSha256, run.Sha256, StringComparison.OrdinalIgnoreCase)
+                        || string.IsNullOrWhiteSpace(repair.WitnessRunSha256)
+                        || repair.WitnessRunSha256.Length != 64
+                        || repair.Count <= 0
+                        || !stock.Success
+                        || !VendorStock.Holds(stock.Value, repair.Count, repair.Items))
+                    {
+                        return Result<SnapshotRecord>.Fail(
+                            "snapshot_vendor_stock_mismatch",
+                            "The snapshot's returned trading-station stock does not match its run save.");
                     }
                 }
 

@@ -28,6 +28,11 @@ namespace NoReturnGuardian.Tests
             new TestCase("a run-start departure capture must hold a run's opening save", TestRunStartDepartureRejected),
             new TestCase("departure evidence tampering or downgrade is rejected", TestDepartureEvidenceTamperingRejected),
             new TestCase("departure retention keeps manual points and drops old departure records", TestDepartureRetention),
+            new TestCase("trading-station stock is read and returned only within its own visit", TestVendorStockWitnessRules),
+            new TestCase("a manual capture returns the trading-station stock the game lost", TestVendorStockManualRepair),
+            new TestCase("a departure capture returns a lost stock and keeps its bound hash", TestVendorStockDepartureRepair),
+            new TestCase("a witness from another visit leaves the captured stock alone", TestVendorStockForeignWitnessKept),
+            new TestCase("the monitor keeps a stock witness only while the game runs, and captures nothing", TestVendorStockMonitorWitness),
             new TestCase("save mutation during copy is rejected", TestCaptureMutationRejected),
             new TestCase("backup evidence mutation during copy is rejected", TestBackupEvidenceMutationRejected),
             new TestCase("incomplete run is rejected as preparation", TestIncompleteCaptureRejected),
@@ -40,10 +45,11 @@ namespace NoReturnGuardian.Tests
             new TestCase("unknown working state word blocks manual capture", TestUnknownWorkingStateWordRejected),
             new TestCase("schema-5 manual capture does not deadlock on one witness", TestSingleWitnessManualCapture),
             new TestCase("native hideout export reconstructs a complete snapshot", TestNativeExportCapture),
-            new TestCase("verified legacy R0A footer reconstructs a complete snapshot", TestNativeLegacyRunFooterCapture),
+            new TestCase("native exports with any footer reconstruct a verified snapshot", TestNativeObservedFooterCapture),
             new TestCase("native R0A CRC corruption blocks capture", TestNativeRunCrcRejected),
-            new TestCase("unknown native R0A footer blocks capture", TestNativeRunFooterRejected),
-            new TestCase("native 0P footer corruption blocks capture", TestNativeProfileFooterRejected),
+            new TestCase("native footer bytes are outside the verified export", TestNativeFooterOutsideChecksum),
+            new TestCase("native 0P CRC corruption blocks capture", TestNativeProfileCrcRejected),
+            new TestCase("rehashed 0P footer tampering is rejected", TestNativeProfileFooterTamperingRejected),
             new TestCase("mixed-generation native export blocks capture", TestNativeExportGenerationRejected),
             new TestCase("partial working envelope cannot fall back to a stale slot", TestPartialWorkingEnvelopeRejected),
             new TestCase("native encounter export cannot be captured", TestNativeEncounterExportRejected),
@@ -648,11 +654,22 @@ namespace NoReturnGuardian.Tests
             }
         }
 
-        private static void TestNativeLegacyRunFooterCapture()
+        private static void TestNativeObservedFooterCapture()
         {
             using (TestWorkspace workspace = TestWorkspace.WithCompleteSave())
             {
-                SyntheticSave.UseNativeLegacyRunFooter(workspace.Profile);
+                // Footers seen on real exports: the R0A rolling-backup tail, and the zero tail later 0P exports carry.
+                byte[] runFooter =
+                {
+                    0x01, 0x01, 0x01, 0x01, 0x05, 0x00, 0x00, 0x00,
+                    0x05, 0x02, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00,
+                    0x00, 0xC0, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x30, 0xC0, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00
+                };
+                byte[] profileFooter = new byte[SaveLayout.SlotEnvelopeLength];
+                SyntheticSave.UseNativeRunFooter(workspace.Profile, runFooter);
+                SyntheticSave.UseNativeProfileFooter(workspace.Profile, profileFooter);
                 SyntheticSave.MakeNativeExportOnly(workspace.Profile);
                 Result<RunStateDescriptor> probe = RunStateProbe.Inspect(
                     workspace.Profile,
@@ -666,6 +683,13 @@ namespace NoReturnGuardian.Tests
                 Assert.Equal(
                     SnapshotCaptureBases.NativeExportedState,
                     snapshot.Manifest.CaptureBasis);
+                Assert.Equal(
+                    new string('0', SaveLayout.SlotEnvelopeLength * 2),
+                    snapshot.Manifest.ProfileSlotExportFooter);
+                byte[] slot = File.ReadAllBytes(SnapshotPayload(snapshot, SaveLayout.RunDataPath));
+                byte[] slotFooter = new byte[SaveLayout.SlotEnvelopeLength];
+                Buffer.BlockCopy(slot, slot.Length - slotFooter.Length, slotFooter, 0, slotFooter.Length);
+                Assert.BytesEqual(runFooter, slotFooter);
                 Result<SnapshotRecord> verification = store.VerifySnapshot(
                     snapshot.Manifest.Id,
                     true);
@@ -673,33 +697,66 @@ namespace NoReturnGuardian.Tests
             }
         }
 
-        private static void TestNativeRunFooterRejected()
+        private static void TestNativeFooterOutsideChecksum()
         {
             using (TestWorkspace workspace = TestWorkspace.WithCompleteSave())
             {
                 SyntheticSave.MakeNativeExportOnly(workspace.Profile);
                 SyntheticSave.CorruptNativeRunFooter(workspace.Profile);
-                Result<RunStateDescriptor> probe = RunStateProbe.Inspect(
-                    workspace.Profile,
-                    true);
-                Assert.True(probe.Success, probe.Message);
-                Assert.False(probe.Value.ManualCaptureReady, "unknown R0A footer passed");
-                Assert.Equal("native_run_export_invalid", probe.Value.ManualCaptureStatus);
-            }
-        }
-
-        private static void TestNativeProfileFooterRejected()
-        {
-            using (TestWorkspace workspace = TestWorkspace.WithCompleteSave())
-            {
-                SyntheticSave.MakeNativeExportOnly(workspace.Profile);
                 SyntheticSave.CorruptNativeProfileFooter(workspace.Profile);
                 Result<RunStateDescriptor> probe = RunStateProbe.Inspect(
                     workspace.Profile,
                     true);
                 Assert.True(probe.Success, probe.Message);
-                Assert.False(probe.Value.ManualCaptureReady, "bad 0P footer passed capture");
+                Assert.True(probe.Value.ManualCaptureReady, probe.Value.ManualCaptureStatus);
+                Assert.Equal("native_export_capture_ready", probe.Value.ManualCaptureStatus);
+            }
+        }
+
+        private static void TestNativeProfileCrcRejected()
+        {
+            using (TestWorkspace workspace = TestWorkspace.WithCompleteSave())
+            {
+                SyntheticSave.MakeNativeExportOnly(workspace.Profile);
+                SyntheticSave.CorruptNativeProfileTail(workspace.Profile);
+                Result<RunStateDescriptor> probe = RunStateProbe.Inspect(
+                    workspace.Profile,
+                    true);
+                Assert.True(probe.Success, probe.Message);
+                Assert.False(probe.Value.ManualCaptureReady, "bad 0P CRC passed capture");
                 Assert.Equal("native_profile_export_invalid", probe.Value.ManualCaptureStatus);
+                Assert.Equal(0, workspace.CreateStore().ListSnapshots().Count);
+            }
+        }
+
+        private static void TestNativeProfileFooterTamperingRejected()
+        {
+            using (TestWorkspace workspace = TestWorkspace.WithCompleteSave())
+            {
+                SyntheticSave.UseNativeProfileFooter(
+                    workspace.Profile,
+                    new byte[SaveLayout.SlotEnvelopeLength]);
+                SyntheticSave.MakeNativeExportOnly(workspace.Profile);
+                SnapshotStore store = workspace.CreateStore();
+                SnapshotRecord snapshot = CaptureManual(store, workspace.Profile);
+                string manifestPath = Path.Combine(snapshot.DirectoryPath, "manifest.json");
+                SnapshotManifest manifest = FileTools.ReadJson<SnapshotManifest>(manifestPath);
+
+                // Without a recorded footer the verifier falls back to the first observed one, which this export
+                // does not carry.
+                manifest.ProfileSlotExportFooter = null;
+                manifest.ManifestSha256 = FileTools.ManifestHash(manifest);
+                FileTools.WriteJsonAtomic(manifestPath, manifest);
+                Result<SnapshotRecord> dropped = store.VerifySnapshot(snapshot.Manifest.Id, true);
+                Assert.False(dropped.Success, "a dropped 0P footer still verified");
+                Assert.Equal("profile_export_hash_mismatch", dropped.Code);
+
+                manifest.ProfileSlotExportFooter = "00";
+                manifest.ManifestSha256 = FileTools.ManifestHash(manifest);
+                FileTools.WriteJsonAtomic(manifestPath, manifest);
+                Result<SnapshotRecord> malformed = store.VerifySnapshot(snapshot.Manifest.Id, true);
+                Assert.False(malformed.Success, "a malformed 0P footer verified");
+                Assert.Equal("snapshot_profile_footer_invalid", malformed.Code);
             }
         }
 
@@ -2984,6 +3041,211 @@ namespace NoReturnGuardian.Tests
             };
         }
 
+        private static readonly long[] VendorItems =
+        {
+            unchecked((long)0xD07350A1B2C3D4E5), 0x445137F0E1D2C3B4, 0x406F1D0102030405, 0x33EFFA0A0B0C0D0E
+        };
+
+        private static void TestVendorStockWitnessRules()
+        {
+            string profile = Path.Combine(Path.GetTempPath(), "vendor-profile");
+            DateTime saved = new DateTime(2026, 10, 17, 12, 47, 10, DateTimeKind.Utc);
+            byte[] baseRaw = SyntheticSave.WorkingRun(3);
+            byte[] stocked = SyntheticSave.WithVendorStock(baseRaw, "seed-a", 4, VendorItems);
+            byte[] lost = SyntheticSave.WithVendorStock(baseRaw, "seed-a", 4);
+
+            Result<VendorStockReading> witnessRead = VendorStock.Read(stocked);
+            Assert.True(witnessRead.Success, witnessRead.Message);
+            Assert.Equal(VendorItems.Length, witnessRead.Value.Count);
+            Assert.Equal(4L, witnessRead.Value.CompletedEncounters);
+            Assert.Equal(SyntheticSave.VendorRunId, witnessRead.Value.RunId);
+            Assert.Equal("seed-a", witnessRead.Value.Seed);
+            Result<VendorStockReading> target = VendorStock.Read(lost);
+            Assert.True(target.Success, target.Message);
+            Assert.Equal(0, target.Value.Count);
+
+            VendorStockWitness witness = VendorStock.ToWitness(
+                witnessRead.Value,
+                profile,
+                FileTools.Sha256Bytes(stocked),
+                saved);
+            Assert.True(
+                VendorStock.WitnessRestores(witness, target.Value, profile, saved.AddSeconds(5)),
+                "an earlier save of the same visit must return the lost stock");
+            byte[] repaired = VendorStock.Repair(lost, target.Value, witness);
+            Assert.BytesEqual(stocked, repaired);
+            Assert.True(
+                VendorStock.Holds(VendorStock.Read(repaired).Value, witness.Count, witness.Items),
+                "the returned stock did not read back");
+
+            // Another run, another completed count, another continue, or a later witness is another visit.
+            foreach (byte[] other in new[]
+            {
+                SyntheticSave.WithVendorStock(baseRaw, "seed-a", 4, VendorItems.Take(2).ToArray()),
+                SyntheticSave.WithVendorStock(baseRaw, "seed-a", 5),
+                SyntheticSave.WithVendorStock(baseRaw, "seed-b", 4),
+                SyntheticSave.WithVendorStock(baseRaw, "seed-a", 4, runId: "a-different-run-0001")
+            })
+            {
+                Assert.False(
+                    VendorStock.WitnessRestores(witness, VendorStock.Read(other).Value, profile, saved.AddSeconds(5)),
+                    "a witness returned stock to a save it does not belong to");
+            }
+
+            Assert.False(
+                VendorStock.WitnessRestores(witness, target.Value, profile, saved),
+                "a witness no older than the target was used");
+            Assert.False(
+                VendorStock.WitnessRestores(witness, target.Value, profile + "-other", saved.AddSeconds(5)),
+                "another profile's witness was used");
+            VendorStockWitness gap = VendorStock.ToWitness(witnessRead.Value, profile, FileTools.Sha256Bytes(stocked), saved);
+            gap.Items[1] = VendorStock.FormatItem(0);
+            Assert.False(
+                VendorStock.WitnessRestores(gap, target.Value, profile, saved.AddSeconds(5)),
+                "a witness whose slots disagree with its count was used");
+
+            byte[] inconsistent = (byte[])stocked.Clone();
+            Buffer.BlockCopy(BitConverter.GetBytes(2L), 0, inconsistent, witnessRead.Value.CountOffset, 8);
+            Assert.Equal("vendor_stock_unreadable", VendorStock.Read(inconsistent).Code);
+            Assert.Equal("vendor_stock_unreadable", VendorStock.Read(baseRaw).Code);
+        }
+
+        private static void TestVendorStockManualRepair()
+        {
+            using (TestWorkspace workspace = TestWorkspace.WithCompleteSave())
+            {
+                SnapshotStore store = workspace.CreateStore();
+                DateTime visit = new DateTime(2026, 10, 17, 12, 46, 57, DateTimeKind.Utc);
+                string runPath = SaveLayout.CombineUnderProfile(workspace.Profile, SaveLayout.GameRunPath);
+                SyntheticSave.WriteVendorStock(workspace.Profile, visit, "seed-a", 4, VendorItems);
+                byte[] stocked = File.ReadAllBytes(runPath);
+                store.ObserveVendorStock(workspace.Profile);
+                Assert.True(File.Exists(store.VendorWitnessPath), "the monitor kept no witness of a stocked save");
+
+                SyntheticSave.WriteVendorStock(workspace.Profile, visit.AddSeconds(18), "seed-a", 4);
+                store.ObserveVendorStock(workspace.Profile);
+                Assert.Equal(
+                    VendorItems.Length,
+                    FileTools.ReadJson<VendorStockWitness>(store.VendorWitnessPath).Count);
+                byte[] live = File.ReadAllBytes(runPath);
+
+                SnapshotRecord snapshot = CaptureManual(store, workspace.Profile);
+                VendorStockRepair repair = snapshot.Manifest.VendorStockRepair;
+                Assert.True(repair != null, "the lost stock was not returned");
+                Assert.Equal(VendorItems.Length, repair.Count);
+                Assert.True(
+                    string.Equals(repair.OriginalRunSha256, FileTools.Sha256Bytes(live), StringComparison.OrdinalIgnoreCase),
+                    "the record must name the save the game wrote");
+                Assert.True(
+                    string.Equals(repair.WitnessRunSha256, FileTools.Sha256Bytes(stocked), StringComparison.OrdinalIgnoreCase),
+                    "the record must name the witness save");
+                Assert.BytesEqual(stocked, File.ReadAllBytes(SnapshotPayload(snapshot, SaveLayout.GameRunPath)));
+                Assert.BytesEqual(stocked, File.ReadAllBytes(SnapshotPayload(snapshot, SaveLayout.GameRunBackupPath)));
+                Assert.BytesEqual(live, File.ReadAllBytes(runPath));
+                Assert.True(SnapshotPolicy.IsConfirmedPreparation(snapshot), "the repaired capture must stay restorable");
+                Result<SnapshotRecord> verified = store.VerifySnapshot(snapshot.Manifest.Id, true);
+                Assert.True(verified.Success, verified.Message);
+
+                Result<RestoreOutcome> restore = store.Restore(
+                    snapshot.Manifest.Id,
+                    workspace.Profile,
+                    new FakeGameProbe(),
+                    null);
+                Assert.True(restore.Success, restore.Message);
+                Assert.BytesEqual(stocked, File.ReadAllBytes(runPath));
+
+                string manifestPath = Path.Combine(snapshot.DirectoryPath, "manifest.json");
+                SnapshotManifest manifest = FileTools.ReadJson<SnapshotManifest>(manifestPath);
+                manifest.VendorStockRepair.Items[0] = VendorStock.FormatItem(VendorItems[1]);
+                manifest.ManifestSha256 = FileTools.ManifestHash(manifest);
+                FileTools.WriteJsonAtomic(manifestPath, manifest);
+                Result<SnapshotRecord> tampered = store.VerifySnapshot(snapshot.Manifest.Id, true);
+                Assert.False(tampered.Success, "a stock record that disagrees with the payload verified");
+                Assert.Equal("snapshot_vendor_stock_mismatch", tampered.Code);
+            }
+        }
+
+        private static void TestVendorStockDepartureRepair()
+        {
+            using (TestWorkspace workspace = TestWorkspace.WithCompleteSave())
+            {
+                SnapshotStore store = workspace.CreateStore();
+                DateTime visit = new DateTime(2026, 10, 17, 12, 46, 57, DateTimeKind.Utc);
+                string runPath = SaveLayout.CombineUnderProfile(workspace.Profile, SaveLayout.GameRunPath);
+                SyntheticSave.WriteVendorStock(workspace.Profile, visit, "seed-a", 4, VendorItems);
+                byte[] stocked = File.ReadAllBytes(runPath);
+                store.ObserveVendorStock(workspace.Profile);
+                SyntheticSave.WriteVendorStock(workspace.Profile, visit.AddSeconds(18), "seed-a", 4);
+                store.ObserveVendorStock(workspace.Profile);
+
+                DepartureEvidence departure = DepartureOf(store, workspace.Profile);
+                SyntheticSave.WriteComplete(workspace.Profile, "20244:9:0", 9);
+                Result<SnapshotRecord> capture = store.CaptureDeparturePreparation(workspace.Profile, departure);
+                Assert.True(capture.Success, capture.Message);
+                SnapshotManifest manifest = capture.Value.Manifest;
+                Assert.True(manifest.VendorStockRepair != null, "the departure capture kept the empty stock");
+                Assert.True(
+                    string.Equals(manifest.DepartureRunSha256, departure.RunSha256, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(
+                            manifest.VendorStockRepair.OriginalRunSha256,
+                            departure.RunSha256,
+                            StringComparison.OrdinalIgnoreCase),
+                    "the bound hash must stay the save the recorder froze");
+                Assert.BytesEqual(stocked, File.ReadAllBytes(SnapshotPayload(capture.Value, SaveLayout.GameRunPath)));
+                Assert.True(SnapshotPolicy.IsConfirmedPreparation(capture.Value), "the repaired departure must be restorable");
+                Assert.Equal("hideout", SnapshotPolicy.Use(capture.Value));
+                Result<SnapshotRecord> verified = store.VerifySnapshot(manifest.Id, true);
+                Assert.True(verified.Success, verified.Message);
+            }
+        }
+
+        private static void TestVendorStockMonitorWitness()
+        {
+            using (TestWorkspace workspace = TestWorkspace.WithCompleteSave())
+            {
+                SnapshotStore store = workspace.CreateStore();
+                FakeGameProbe process = new FakeGameProbe { Running = false };
+                GuardianMonitor monitor = new GuardianMonitor(store, process, workspace.Clock);
+                monitor.SetProfile(workspace.Profile);
+                SyntheticSave.WriteVendorStock(
+                    workspace.Profile,
+                    new DateTime(2026, 10, 17, 12, 46, 57, DateTimeKind.Utc),
+                    "seed-a",
+                    4,
+                    VendorItems);
+                monitor.Poll();
+                Assert.False(File.Exists(store.VendorWitnessPath), "a witness was kept while the game was not running");
+
+                process.Running = true;
+                monitor.Poll();
+                VendorStockWitness witness = FileTools.ReadJson<VendorStockWitness>(store.VendorWitnessPath);
+                Assert.Equal(VendorItems.Length, witness.Count);
+                Assert.Equal(Path.GetFullPath(workspace.Profile), witness.ProfilePath);
+                Assert.Equal(0, store.ListSnapshots().Count);
+            }
+        }
+
+        private static void TestVendorStockForeignWitnessKept()
+        {
+            using (TestWorkspace workspace = TestWorkspace.WithCompleteSave())
+            {
+                SnapshotStore store = workspace.CreateStore();
+                DateTime visit = new DateTime(2026, 10, 17, 12, 46, 57, DateTimeKind.Utc);
+                string runPath = SaveLayout.CombineUnderProfile(workspace.Profile, SaveLayout.GameRunPath);
+                SyntheticSave.WriteVendorStock(workspace.Profile, visit, "seed-a", 4, VendorItems);
+                store.ObserveVendorStock(workspace.Profile);
+
+                // A continue re-rolls the seed: the witness belongs to the visit before it.
+                SyntheticSave.WriteVendorStock(workspace.Profile, visit.AddMinutes(5), "seed-b", 4);
+                byte[] live = File.ReadAllBytes(runPath);
+                SnapshotRecord snapshot = CaptureManual(store, workspace.Profile);
+                Assert.True(snapshot.Manifest.VendorStockRepair == null, "a foreign witness changed the capture");
+                Assert.BytesEqual(live, File.ReadAllBytes(SnapshotPayload(snapshot, SaveLayout.GameRunPath)));
+                Result<SnapshotRecord> verified = store.VerifySnapshot(snapshot.Manifest.Id, true);
+                Assert.True(verified.Success, verified.Message);
+            }
+        }
+
         private static SnapshotRecord CaptureManual(SnapshotStore store, string profile)
         {
             Result<SnapshotRecord> result = store.Capture(
@@ -3334,6 +3596,123 @@ namespace NoReturnGuardian.Tests
             WriteState(profile, marker, seed, 1, false);
         }
 
+        public const string VendorRunId = "d8d4d1fe6935fbf97ff9ddb3f9ae1f4";
+        private const int VendorArenaStart = 0x590 + 0x418;
+
+        public static byte[] WorkingRun(byte seed)
+        {
+            byte[] raw = Pattern(8192 + seed * 16, seed, 17);
+            EmbedWorkingState(raw, seed, false);
+            return raw;
+        }
+
+        /// <summary>
+        /// The working R0A with its body replaced by a serialized arena holding only the run object's
+        /// trading-station fields, laid out as the game's saves are (version 27, root container, keyed run
+        /// object, a 16-slot integer list).
+        /// </summary>
+        public static byte[] WithVendorStock(
+            byte[] raw,
+            string seed,
+            long completed,
+            long[] stock = null,
+            string runId = null)
+        {
+            stock = stock ?? new long[0];
+            byte[] arena = new byte[1024];
+            int cursor = 0x40;
+            Func<int, int> alloc = size =>
+            {
+                int at = (cursor + 7) & ~7;
+                cursor = at + size;
+                return at;
+            };
+            Action<int, ulong> put = (at, value) => Buffer.BlockCopy(BitConverter.GetBytes(value), 0, arena, at, 8);
+            Func<string, int> text = value =>
+            {
+                byte[] bytes = Encoding.UTF8.GetBytes(value);
+                int at = alloc(bytes.Length + 1);
+                Buffer.BlockCopy(bytes, 0, arena, at, bytes.Length);
+                return at;
+            };
+            Func<int, int, int, int, int> node = (count, values, kinds, keys) =>
+            {
+                int at = alloc(0x20);
+                Buffer.BlockCopy(BitConverter.GetBytes(count), 0, arena, at + 4, 4);
+                put(at + 8, (ulong)values);
+                put(at + 0x10, (ulong)kinds);
+                put(at + 0x18, (ulong)keys);
+                return at;
+            };
+
+            arena[0] = 5;
+            int rootSlot = alloc(8);
+            put(8, (ulong)rootSlot);
+            int rootValues = alloc(8);
+            int rootKinds = alloc(1);
+            int rootKeys = alloc(8);
+            put(rootSlot, (ulong)node(1, rootValues, rootKinds, rootKeys));
+            arena[rootKinds] = 6;
+            put(rootKeys, 0x92AD3946449C662D);
+
+            ulong[] keys = { 0x7A42A069A2B91748, 0x6E133B0E37FD8006, 0x0B55C175A3A096A0, 0xA3CFA1D0C8AA075A, 0xC0447FC28ACA3578 };
+            byte[] kinds = { 1, 5, 4, 1, 4 };
+            int runValues = alloc(keys.Length * 8);
+            int runKinds = alloc(keys.Length);
+            int runKeys = alloc(keys.Length * 8);
+            put(rootValues, (ulong)node(keys.Length, runValues, runKinds, runKeys));
+            for (int index = 0; index < keys.Length; index++)
+            {
+                arena[runKinds + index] = kinds[index];
+                put(runKeys + index * 8, keys[index]);
+            }
+
+            int slotValues = alloc(16 * 8);
+            int slotKinds = alloc(16);
+            for (int index = 0; index < 16; index++)
+            {
+                arena[slotKinds + index] = 1;
+                put(slotValues + index * 8, index < stock.Length ? unchecked((ulong)stock[index]) : 0);
+            }
+
+            put(runValues, (ulong)stock.Length);
+            put(runValues + 8, (ulong)node(16, slotValues, slotKinds, 0));
+            put(runValues + 16, (ulong)text(runId ?? VendorRunId));
+            put(runValues + 24, (ulong)completed);
+            put(runValues + 32, (ulong)text(seed));
+            int length = (cursor + 7) & ~7;
+            Buffer.BlockCopy(BitConverter.GetBytes(length), 0, arena, 0x38, 4);
+
+            byte[] result = new byte[VendorArenaStart + length];
+            Buffer.BlockCopy(raw, 0, result, 0, VendorArenaStart);
+            Array.Clear(result, 2, 14);
+            Buffer.BlockCopy(arena, 0, result, VendorArenaStart, length);
+            Buffer.BlockCopy(BitConverter.GetBytes((uint)(result.Length - 1424)), 0, result, 1428, 4);
+            Buffer.BlockCopy(BitConverter.GetBytes(27u), 0, result, 1432, 4);
+            return result;
+        }
+
+        /// <summary>A hideout save of the vendor run, written by the game at <paramref name="savedUtc"/>.</summary>
+        public static void WriteVendorStock(
+            string profile,
+            DateTime savedUtc,
+            string seed,
+            long completed,
+            long[] stock = null)
+        {
+            byte[] raw = WithVendorStock(
+                WorkingRun(3),
+                seed,
+                completed,
+                stock);
+            WriteFile(profile, SaveLayout.GameRunPath, raw);
+            WriteFile(profile, SaveLayout.GameRunBackupPath, raw);
+            foreach (string relativePath in SaveLayout.RequiredFiles)
+            {
+                File.SetLastWriteTimeUtc(SaveLayout.CombineUnderProfile(profile, relativePath), savedUtc);
+            }
+        }
+
         public static void MakeNativeExportOnly(string profile)
         {
             foreach (string relativePath in new[]
@@ -3361,7 +3740,7 @@ namespace NoReturnGuardian.Tests
             CorruptFileByte(path, (int)new FileInfo(path).Length - 1);
         }
 
-        public static void UseNativeLegacyRunFooter(string profile)
+        public static void UseNativeRunFooter(string profile, byte[] footer)
         {
             string dataPath = SaveLayout.CombineUnderProfile(profile, SaveLayout.RunDataPath);
             Result<DecodedSlotPayload> decoded = RunSlotSynthesizer.DecodeNativeExport(
@@ -3373,14 +3752,6 @@ namespace NoReturnGuardian.Tests
                 throw new InvalidOperationException(decoded.Message);
             }
 
-            byte[] footer =
-            {
-                0x01, 0x01, 0x01, 0x01, 0x05, 0x00, 0x00, 0x00,
-                0x05, 0x02, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00,
-                0x00, 0xC0, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x30, 0xC0, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00
-            };
             byte[] exported;
             string detail;
             string error;
@@ -3399,12 +3770,45 @@ namespace NoReturnGuardian.Tests
             File.SetLastWriteTimeUtc(dataPath, writeUtc);
         }
 
+        public static void UseNativeProfileFooter(string profile, byte[] footer)
+        {
+            string dataPath = SaveLayout.CombineUnderProfile(profile, SaveLayout.ProfileDataPath);
+            Result<DecodedSlotPayload> decoded = ProfileSlotCodec.DecodeNativeExport(
+                dataPath,
+                SaveLayout.CombineUnderProfile(profile, SaveLayout.ProfileParamsPath),
+                SaveLayout.CombineUnderProfile(profile, SaveLayout.ProfileIconPath));
+            if (!decoded.Success)
+            {
+                throw new InvalidOperationException(decoded.Message);
+            }
+
+            Result<byte[]> exported = ProfileSlotCodec.BuildExport(decoded.Value.RawBytes, footer);
+            if (!exported.Success)
+            {
+                throw new InvalidOperationException(exported.Message);
+            }
+
+            DateTime writeUtc = File.GetLastWriteTimeUtc(dataPath);
+            File.WriteAllBytes(dataPath, exported.Value);
+            File.SetLastWriteTimeUtc(dataPath, writeUtc);
+        }
+
         public static void CorruptNativeProfileFooter(string profile)
         {
             string path = SaveLayout.CombineUnderProfile(
                 profile,
                 SaveLayout.ProfileDataPath);
             CorruptFileByte(path, (int)new FileInfo(path).Length - 1);
+        }
+
+        public static void CorruptNativeProfileTail(string profile)
+        {
+            string path = SaveLayout.CombineUnderProfile(
+                profile,
+                SaveLayout.ProfileDataPath);
+            CorruptFileByte(
+                path,
+                (int)new FileInfo(path).Length - SaveLayout.SlotEnvelopeLength - 1);
         }
 
         public static void MakeNativeProfileGenerationOlder(

@@ -106,6 +106,11 @@ namespace NoReturnGuardian.Core
                 return status;
             }
 
+            if (gameRunning)
+            {
+                _store.ObserveVendorStock(_profilePath);
+            }
+
             Result<RunStateDescriptor> probe = RunStateProbe.Inspect(_profilePath, true);
             if (!probe.Success)
             {
