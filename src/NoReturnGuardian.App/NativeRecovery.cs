@@ -318,6 +318,7 @@ namespace NoReturnGuardian
                 bool pressing = false;
                 while ((line = process.StandardOutput.ReadLine()) != null)
                 {
+                    if (line.Contains("results-entry-awaited")) progress("等待结算页出现");
                     if (!pressing && line.Contains("results-continue-injected"))
                     {
                         pressing = true;

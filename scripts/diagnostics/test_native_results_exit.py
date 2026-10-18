@@ -179,12 +179,19 @@ class ResultsExitTests(unittest.TestCase):
         self.assertEqual(ui.call_count, 3)
 
     def run_exit(self, directory, observations, monotonic, restored=True, identity=None):
-        with patch('NativeResultsExit.observe_results', side_effect=observations), \
+        with patch('NativeResultsExit.observe_results', side_effect=observations) as observe, \
                 patch('NativeResultsExit.ContinueInjector') as injector_type, \
                 patch('NativeResultsExit.time.monotonic', side_effect=monotonic), \
                 patch('NativeResultsExit.time.sleep'), \
                 patch('NativeResultsExit.verify_unloaded_menu') as verified:
             injector = injector_type.return_value
+            # How many observations the hooks waited for.
+            self.observed_before_hooks = None
+
+            def install(*args, **kwargs):
+                self.observed_before_hooks = observe.call_count
+                return injector
+            injector_type.side_effect = install
             injector.stopped = None
             pending = []
             injector.press.side_effect = lambda: pending.append({'kind': 'results-continue-injected'}) or 1
@@ -280,6 +287,34 @@ class ResultsExitTests(unittest.TestCase):
             self.assertRegex(str(error), 'timed out')
             injector.press.assert_not_called()
             verified.assert_not_called()
+
+    def test_a_recovery_started_as_the_run_ends_waits_for_its_results_page_before_any_hook(self):
+        # 2026-10-18: a restart pressed right after a death saw the encounter's task, then none; the
+        # results page came about eight seconds later.
+        ended = dict(results(None), taskWord=1)
+        no_task = dict(results(None), taskWord=None, task=None)
+        with tempfile.TemporaryDirectory() as directory:
+            _, error, injector, verified, _ = self.run_exit(
+                directory, [ended, no_task, results(), results(), results(), menu(), menu()],
+                [0, 2, 4, 4, 5, 5.1, 5.3, 5.4, 5.5, 7.5])
+            self.assertIsNone(error)
+            self.assertEqual(self.observed_before_hooks, 3)
+            injector.press.assert_called_once_with()
+            verified.assert_called_once()
+            kinds = [record['kind'] for record in journal(directory)]
+            self.assertEqual(kinds[1:5], ['results-entry-observed', 'results-entry-awaited',
+                                          'results-entry-observed', 'results-entry-observed'])
+
+    def test_no_results_page_after_the_run_ends_is_refused_without_any_hook(self):
+        ended = dict(results(None), taskWord=1)
+        with tempfile.TemporaryDirectory() as directory:
+            _, error, injector, verified, _ = self.run_exit(
+                directory, [ended, {'unstable': True}] + [dict(ended, taskWord=None)] * 4, [0, 10, 20, 30, 40, 46])
+            self.assertRegex(str(error), 'Results entry requires a visible death results page')
+            self.assertIsNone(self.observed_before_hooks)
+            injector.press.assert_not_called()
+            verified.assert_not_called()
+            self.assertEqual(journal(directory)[-1]['kind'], 'results-exit-stopped')
 
     def test_injector_stop_is_fatal_before_any_further_observation(self):
         with tempfile.TemporaryDirectory() as directory, \
@@ -435,6 +470,24 @@ class ResultsUiTests(unittest.TestCase):
 
         def read(address, size):
             if address == memory.page + 0x130 and address in seen:
+                return bytes(size)
+            seen.add(address)
+            return memory.read(address, size)
+        with self.assertRaises(TransientUiChange):
+            inspect_results_ui(read, memory.base)
+
+    def test_a_cycle_read_while_a_page_is_rebuilt_is_a_transient_change(self):
+        # 2026-10-18: a walk right after the seventh continue met a cycle in a page the game was rebuilding.
+        memory = UiMemory()
+        memory.put(0x40238, 0x40200)
+        with self.assertRaisesRegex(ProbeError, 'cyclic') as stable:
+            inspect_results_ui(memory.read, memory.base)
+        self.assertNotIsInstance(stable.exception, TransientUiChange)
+        seen = set()
+
+        def read(address, size):
+            # The page's sibling link points back at it only while the walk passes.
+            if address == 0x40238 and address in seen:
                 return bytes(size)
             seen.add(address)
             return memory.read(address, size)

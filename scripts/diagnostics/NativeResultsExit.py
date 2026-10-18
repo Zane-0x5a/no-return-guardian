@@ -27,6 +27,10 @@ MAXIMUM_TOKENS = 800
 STALLED_PRESSES = 10
 STALLED_SECONDS = 8
 MENU_STABLE_SECONDS = 1.0
+# A recovery started as the run ends waits, reading only, for its results page: about 8 seconds after the
+# run ends (2026-10-18), longer while the game is throttled in the background; the abandon path waits as long.
+ENTRY_SECONDS = 45
+ENTRY_POLL_SECONDS = 0.1
 JOURNAL_LIMIT = 262144
 
 
@@ -90,6 +94,13 @@ class ResultsExit:
         """Counts a continue the game actually consumed; unconsumed tokens are not presses."""
         self.total_presses += 1
         self.stalled_presses += 1
+
+    @staticmethod
+    def arriving(observed):
+        """Whether the results page may still be on its way: the run is loaded and no results page is on top
+        yet. After a run ends the game shows the dead encounter's task, then none, then the results task."""
+        return bool(observed.get('unstable')) or (
+            observed['initialized'] == 1 and not observed['unloaded'] and not (observed['ui'] or {}).get('topPage'))
 
     def step(self, observed, now, issue=True):
         """With issue=False the entry is validated and the flow adopted, but no token is counted."""
@@ -269,6 +280,11 @@ def progress_marker(observed):
             observed.get('taskWord')) + signature(observed) + (ui.get('page'),)
 
 
+def arrival_marker(observed):
+    ui = observed.get('ui') or {}
+    return (observed.get('unloaded'), observed.get('initialized'), observed.get('taskWord'), ui.get('topPage'))
+
+
 def finish_results(process, base, pid, birth, log_path, identity_check, fingerprints, timeout=90,
                    prefetch=None):
     controller = ResultsExit()
@@ -325,7 +341,32 @@ def finish_results(process, base, pid, birth, log_path, identity_check, fingerpr
             identity_check()
             initial = observe_results(process, base)
             record('results-entry-observed', observed=initial)
-            controller.step(initial, time.monotonic(), issue=False)
+            arrival, shown = None, arrival_marker(initial)
+            while True:
+                now = time.monotonic()
+                try:
+                    controller.step(initial, now, issue=False)
+                    break
+                except ProbeError:
+                    if not controller.arriving(initial):
+                        raise
+                    if arrival is None:
+                        arrival = now + ENTRY_SECONDS
+                        record('results-entry-awaited', seconds=ENTRY_SECONDS)
+                    elif now >= arrival:
+                        raise ProbeError('Results entry requires a visible death results page; '
+                                         'none appeared after the run ended')
+                time.sleep(ENTRY_POLL_SECONDS)
+                identity_check()
+                try:
+                    observed = observe_results(process, base)
+                except ProbeError:
+                    observed = {'unstable': True}
+                # Only the run's way to its results page is journaled: an animated focus would fill it.
+                if not observed.get('unstable') and arrival_marker(observed) != shown:
+                    shown = arrival_marker(observed)
+                    record('results-entry-observed', observed=observed)
+                initial = observed
             injector = ContinueInjector(pid, base, hooks,
                                         session=prefetch.take() if prefetch is not None else None)
             injector.installed(record)
