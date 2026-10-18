@@ -1,7 +1,7 @@
 """Guardian's departure recorder: wait for the player's route-board departure and record it.
 
 Guardian starts it after an explicit protect or a native recovery of a preparation, or, with 出发自动保存,
-whenever the game has run for a minute. It arms only in a playable hideout, installs one read-only probe on
+whenever the game has run for ten seconds. It arms only in a playable hideout, installs one read-only probe on
 the broadcast core, and writes the first `player-next-task` event's slots once the encounter is entered
 (NativeDepartureRecord). With a profile it also freezes the hideout's saves, a new run's opening save
 included, and publishes the one before the departure as a new preparation, which then owns the record
