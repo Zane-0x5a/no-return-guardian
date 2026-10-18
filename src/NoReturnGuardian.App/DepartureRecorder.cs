@@ -18,6 +18,8 @@ namespace NoReturnGuardian
     {
         private const int Retention = 10;
         private static readonly TimeSpan WatchBackoff = TimeSpan.FromSeconds(60);
+        // 游戏进程起来这么久再读它：模块早已载入，玩家又还来不及从菜单进到兵营（最快一次约 30 秒）。
+        private static readonly TimeSpan StartupDelay = TimeSpan.FromSeconds(10);
         private readonly IGuardianHost _host;
         private readonly bool _enabled;
         private Process _process;
@@ -124,8 +126,9 @@ namespace NoReturnGuardian
                 return;
             }
 
-            // 游戏刚启动时还在加载，等它跑满一分钟再挂，免得启动期的读取失败被当成记录器故障。
-            if (game.Pid != _blockedPid && DateTime.FromFileTimeUtc(game.Birth) <= DateTime.UtcNow - WatchBackoff)
+            // 要在玩家从菜单继续进兵营之前挂上：记录器只认它看到兵营之后写的存档，挂晚了，进兵营后最早的
+            // 那几份就不算数，马上出发时没有可存的战备（2026-10-16、10-18 都是晚了几秒）。
+            if (game.Pid != _blockedPid && DateTime.FromFileTimeUtc(game.Birth) <= DateTime.UtcNow - StartupDelay)
             {
                 Start(game, null);
             }
