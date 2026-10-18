@@ -89,7 +89,8 @@ export type HostMessage =
   | { type: 'toast'; text: string; tone: Tone }
   /** 恢复面板的进度；text 是给玩家的一两句说明，脚本的原话只进诊断日志 */
   | { type: 'recovery'; phase: 'running' | 'done' | 'failed'; text: string }
-  | { type: 'sheet'; sheet: HostSheet };
+  /** null 收起面板：快捷键开始的恢复取代了窗口里开着的确认面板 */
+  | { type: 'sheet'; sheet: HostSheet | null };
 
 export type Tone = 'neutral' | 'signal' | 'danger';
 

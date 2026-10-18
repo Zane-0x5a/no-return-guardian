@@ -229,6 +229,12 @@ namespace NoReturnGuardian
             }
 
             _recorder.Stop();
+            if (!fromWindow && PanelOpen)
+            {
+                // 快捷键取代了窗口里还开着的确认面板：收起它，免得它停在一次不属于它的恢复上（2026-10-18）。
+                _host.ShowSheet(null);
+            }
+
             PanelOpen = fromWindow;
             GuardianSettings settings = _host.Settings;
             string storage = settings.StoragePath;
@@ -237,7 +243,14 @@ namespace NoReturnGuardian
             string targetTime = GuardianView.TimeOf(request.Target.CreatedUtc.ToLocalTime());
             NativeRecovery.GameTarget game = request.Game;
             var worker = new BackgroundWorker { WorkerReportsProgress = true };
-            worker.ProgressChanged += (sender, args) => _host.PostRecovery("running", (string)args.UserState);
+            // 面板只跟着窗口发起的恢复走；快捷键的开始和结果走托盘气泡和 toast。
+            worker.ProgressChanged += (sender, args) =>
+            {
+                if (fromWindow)
+                {
+                    _host.PostRecovery("running", (string)args.UserState);
+                }
+            };
             worker.DoWork += (sender, args) =>
             {
                 try

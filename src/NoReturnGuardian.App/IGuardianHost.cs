@@ -42,6 +42,7 @@ namespace NoReturnGuardian
         /// <summary>恢复面板的进度：running、done、failed。</summary>
         void PostRecovery(string phase, string text);
 
+        /// <summary>页面上的面板；null 收起开着的面板。</summary>
         void ShowSheet(Dictionary<string, object> sheet);
 
         void RunOnUiThread(Action action);
