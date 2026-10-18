@@ -316,6 +316,11 @@ namespace NoReturnGuardian
                 {
                     // 出错退出（例如游戏还在启动、代码未就绪）时隔一会儿再挂，免得反复重启。
                     _retryUtc = DateTime.UtcNow + WatchBackoff;
+                    if (NativeRecovery.RecorderRefusedBuild(logPath))
+                    {
+                        // 游戏版本没通过代码核对：同一个游戏进程里每次重试都只会再读一遍游戏文件、得到同样的拒绝。
+                        _blockedPid = pid;
+                    }
                 }
 
                 Report(owner, protecting, pid, logPath, exitCode);

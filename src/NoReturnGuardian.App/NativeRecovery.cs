@@ -486,6 +486,20 @@ namespace NoReturnGuardian
             return stop == null ? null : stop.Text("reason");
         }
 
+        /// <summary>记录器因为游戏版本没通过代码核对而停下；日志读不出时为 false。</summary>
+        public static bool RecorderRefusedBuild(string logPath)
+        {
+            try
+            {
+                string reason = ReadRecorderStop(logPath);
+                return reason != null && reason.StartsWith(UnverifiedBuildReason, StringComparison.Ordinal);
+            }
+            catch (Exception error) when (RecoveryJournal.Unreadable(error))
+            {
+                return false;
+            }
+        }
+
         /// <summary>
         /// 记录器没写出出发记录时给玩家看的原因；守护器自己停掉的返回 null。自动保存模式下记录器会一直重启，
         /// 离开兵营、游戏退出、等待到期这类正常结束也不打扰玩家。原话由调用方记进诊断记录。
