@@ -35,7 +35,9 @@ function pointer(address, memory = new Map()) {
     };
 }
 
-function fixture(fingerprints = sites.map(rva => ({rva, bytes: '00'.repeat(32)}))) {
+const verified = Object.fromEntries(sites.map(rva => [`0x${rva.toString(16)}`, rva]));
+
+function fixture(fingerprints = sites.map(rva => ({rva, bytes: '00'.repeat(32)})), addresses = verified) {
     const messages = [];
     const hooks = new Map();
     const detached = [];
@@ -44,7 +46,8 @@ function fixture(fingerprints = sites.map(rva => ({rva, bytes: '00'.repeat(32)})
     const clock = {now: 1000};
     const context = {
         nativeResultsContinueConfiguration: {mode: 'results-continue', pid: 42,
-            base: `0x${base.toString(16)}`, duration: 60, maximumInjections: 3, minimumGapMs: 100, fingerprints},
+            base: `0x${base.toString(16)}`, duration: 60, maximumInjections: 3, minimumGapMs: 100, fingerprints,
+            addresses},
         Date: {now: () => clock.now},
         Process: {id: 42, arch: 'x64', mainModule: {name: 'tlou-ii.exe', base: pointer(base), size: 0x40000000}},
         Interceptor: {
@@ -133,4 +136,13 @@ test('invalid tokens and missing fingerprints install nothing', () => {
     const missing = fixture([]);
     assert.equal(missing.hooks.size, 0);
     assert.match(missing.messages.at(-1).reason, /fingerprint/i);
+});
+
+test('another build hooks the continue natives where its own table puts them, or not at all', () => {
+    const moved = Object.fromEntries(sites.map(rva => [`0x${rva.toString(16)}`, rva + 0x6000]));
+    const probe = fixture(undefined, moved);
+    assert.deepEqual([...probe.hooks.keys()].sort(), sites.map(rva => rva + 0x6000).sort());
+    const partial = fixture(undefined, {[`0x${sites[0].toString(16)}`]: sites[0]});
+    assert.equal(partial.hooks.size, 0);
+    assert.match(partial.messages.at(-1).reason, /No native address/);
 });

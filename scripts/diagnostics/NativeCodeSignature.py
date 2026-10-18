@@ -1,14 +1,21 @@
-"""What a game build must share with the verified build before the native scripts touch it.
+"""What a game build must share with a known build before the native scripts touch it.
 
-The native scripts hook, call and compare return addresses at fixed offsets taken from one build of the
-game. Instead of accepting only that exact executable, any build is accepted when its sections start
-where the verified build's do and the bytes at every one of those offsets are identical: a patch that
-leaves this code alone keeps working, and one that moves or changes it is refused before anything is
-attached, so nothing in the game is changed.
+The native scripts hook, call, compare return addresses with, and read game state at fixed addresses, each
+named by where it lies in one build of the game: the verified build. Instead of accepting only that exact
+executable, a build is accepted when it is one of the known builds below: its sections start where that
+build's do and the bytes at every pinned site are identical. A patch that leaves this code alone keeps
+working, and one that moves or changes it is refused before anything is attached, so nothing in the game
+is changed.
 
-Regenerate the table from a verified build with `python NativeCodeSignature.py <tlou-ii.exe>` after
-adding a site to the native scripts.
+Every known build after the verified one carries a relocation: where each address of the verified build
+lives in it. RelocateNativeBuild.py derives it read-only and accepts a code address only where the code
+around it is identical apart from displacements; its report holds that build's sections and pins.
+
+Regenerate the verified table with `python NativeCodeSignature.py <tlou-ii.exe>` after adding a site to the
+native scripts, then rerun RelocateNativeBuild.py for every other build.
 """
+from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 import hashlib
 import sys
@@ -24,6 +31,65 @@ CODE_BYTES = 32
 # and the profile stat service's vtable through slot 9, whose setter the bridge calls.
 EXTRA_SITES = ((0xFD7909 - 8, 16), (0x1B802C3 - 8, 16), (0x1B8152F - 8, 16), (0x1B82059 - 8, 16),
                (0x1BE144E - 8, 16), (0x2AF57D8, 0x50))
+# Every return address a native mode compares a caller with; the last only in the trigger experiments.
+RETURN_ADDRESSES = (0xFD7909, 0x1B802C3, 0x1B8152F, 0x1B82059, 0x1BE144E, 0x133EC36)
+# Data the native modes read, compare or hand to the game: the run and save managers, the Rogue and mode
+# flags, the task context, the broadcast target, the profile stat service and its vtable, and the results
+# UI's manager, hash table and page types. None of it is pinned: it is game state, not code.
+DATA_ADDRESSES = (0x415AC90, 0x415AD30, 0x4161F58, 0x9334770, 0x9341660, 0x9342080, 0x9398730, 0x9398790,
+                  0x4248B78, 0x2AF57D8, 0x92D08D8, 0x37D6928, 0x37D69B8, 0x9493978, 0x9493BA8, 0x9497E88)
+VTABLES = ((0x2AF57D8, 0x50),)
+
+
+def code_addresses():
+    """Every code address a native mode hooks, calls, or compares a return address with."""
+    from NativeCheckpointTrigger import (CODE_RVAS, COLLECTION_RVAS, ENCOUNTER_RVAS, LIFECYCLE_RVAS, LOAD_RVAS,
+                                         RECOVERY_RVAS, RESULTS_RVAS, RESUME_RVAS)
+    from NativeEncounterRestart import CONTROL_RVAS
+    from NativeResultsExit import CONTINUE_RVAS
+    return frozenset(rva for group in (CODE_RVAS, LIFECYCLE_RVAS, RESUME_RVAS, LOAD_RVAS, COLLECTION_RVAS,
+                                       RECOVERY_RVAS, RESULTS_RVAS, ENCOUNTER_RVAS, CONTROL_RVAS, CONTINUE_RVAS,
+                                       RETURN_ADDRESSES) for rva in group)
+
+
+@cache
+def native_addresses():
+    """Every address of the verified build the native scripts use."""
+    return code_addresses() | frozenset(DATA_ADDRESSES)
+
+
+@dataclass(frozen=True)
+class Build:
+    """A build of the game the native scripts know."""
+    name: str
+    sections: dict
+    pinned: dict
+    # Where each address of the verified build lives in this build; None for the verified build itself.
+    relocation: dict = None
+
+    def mismatch(self, image):
+        """None when the image is this build at every pinned site, otherwise where it differs."""
+        try:
+            preferred, headers, sections = read_layout(image)
+            starts = {section.name: section.virtual_address for section in sections}
+            if starts != self.sections:
+                return 'section layout'
+            for rva, expected in self.pinned.items():
+                offset, _ = va_to_offset(preferred + rva, preferred, headers, sections)
+                if image[offset:offset + len(expected) // 2].hex() != expected:
+                    return f'code at {rva:#x}'
+        except PeError as error:
+            return f'unreadable executable: {error}'
+        return None
+
+    def has(self, rva):
+        return rva in native_addresses() and (self.relocation is None or rva in self.relocation)
+
+    def at(self, rva):
+        """This build's RVA for an address of the verified build."""
+        if not self.has(rva):
+            raise ValueError(f'{rva:#x} is not a native address of the {self.name} build')
+        return rva if self.relocation is None else self.relocation[rva]
 
 # Generated from the verified build (see the module docstring).
 SECTIONS = {'.text': 0x1000, '.rdata': 0x2a86000, '.data': 0x3539000, '.pdata': 0x9652000, '_RDATA': 0x9841000, '.rsrc': 0x9855000, '.reloc': 0x99c6000}
@@ -103,20 +169,52 @@ PINNED = {
 }
 
 
+VERIFIED = Build('verified', SECTIONS, PINNED)
+BUILDS = (VERIFIED,)
+
+
+def match_build(image):
+    """(build, None) for the known build the image matches at every pinned site, else (None, where it differs
+    from the known build whose sections it shares, or 'section layout')."""
+    reasons = []
+    for build in BUILDS:
+        reason = build.mismatch(image)
+        if reason is None:
+            return build, None
+        reasons.append(reason)
+    return None, next((reason for reason in reasons if reason != 'section layout'), 'section layout')
+
+
 def signature_mismatch(image):
-    """None when the image matches the verified build at every pinned site, otherwise where it differs."""
-    try:
-        preferred, headers, sections = read_layout(image)
-        starts = {section.name: section.virtual_address for section in sections}
-        if starts != SECTIONS:
-            return 'section layout'
-        for rva, expected in PINNED.items():
-            offset, _ = va_to_offset(preferred + rva, preferred, headers, sections)
-            if image[offset:offset + len(expected) // 2].hex() != expected:
-                return f'code at {rva:#x}'
-    except PeError as error:
-        return f'unreadable executable: {error}'
-    return None
+    """None when the image is a known build at every pinned site, otherwise where it differs."""
+    return match_build(image)[1]
+
+
+# The build of the game this process attached to, set once NativeCheckpointProbe.verify_build accepted it.
+# Each native script serves one game process, and no address is available before its build is verified.
+_active = None
+
+
+def activate(build):
+    global _active
+    _active = build
+
+
+def active():
+    if _active is None:
+        raise ValueError("The game's build has not been verified")
+    return _active
+
+
+def at(rva):
+    """The attached build's RVA for an address of the verified build."""
+    return active().at(rva)
+
+
+def addresses():
+    """Every native address the attached build has, for the Frida scripts: verified-build hex -> RVA."""
+    build = active()
+    return {hex(rva): build.at(rva) for rva in sorted(native_addresses()) if build.has(rva)}
 
 
 def main(argv):

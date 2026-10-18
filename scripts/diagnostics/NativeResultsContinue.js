@@ -16,6 +16,13 @@ let queries = 0;
 let injected = 0;
 let lastInjection = -Infinity;
 
+// This build's address for a native address, named by its RVA in the verified build (NativeCodeSignature).
+function at(rva) {
+    const actual = (configuration.addresses || {})['0x' + rva.toString(16)];
+    if (!Number.isInteger(actual)) throw new Error(`No native address ${rva.toString(16)} in this build`);
+    return image.base.add(actual);
+}
+
 function publish(kind, fields = {}) {
     send({ kind, time: Date.now(), gameTerminationIssued: false, ...fields });
 }
@@ -99,13 +106,13 @@ function install() {
     for (const [site, rva] of sites) {
         const fingerprint = configuration.fingerprints.find(record => record.rva === rva);
         if (!fingerprint || fingerprint.bytes.length !== 64 ||
-            Array.from(new Uint8Array(image.base.add(rva).readByteArray(32)))
+            Array.from(new Uint8Array(at(rva).readByteArray(32)))
                 .map(value => value.toString(16).padStart(2, '0')).join('') !== fingerprint.bytes) {
             throw new Error(`Code fingerprint mismatch: ${site}`);
         }
     }
     for (const [site, rva] of sites) {
-        listeners.push(Interceptor.attach(image.base.add(rva), {
+        listeners.push(Interceptor.attach(at(rva), {
             onEnter(args) { enter(site, this, args); },
             onLeave() { leave(this); }
         }));

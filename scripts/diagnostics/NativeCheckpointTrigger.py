@@ -13,7 +13,8 @@ import threading
 import time
 from types import SimpleNamespace
 
-from NativeCheckpointProbe import FRIDA_DEPS, ReadOnlyProcess, ProbeError, verify_build
+from NativeCheckpointProbe import FRIDA_DEPS, ReadOnlyProcess, ProbeError, require_verified_build, verify_build
+from NativeCodeSignature import addresses, at
 from InspectPeVa import read_layout, va_to_offset
 
 
@@ -114,7 +115,7 @@ def fingerprints(image, mode='observe'):
     if mode == 'encounter-control':
         selected = ENCOUNTER_RVAS
     for rva in selected:
-        offset, section = va_to_offset(base + rva, base, headers, sections)
+        offset, section = va_to_offset(base + at(rva), base, headers, sections)
         if section != '.text':
             raise ProbeError('Expected executable code section')
         result.append({'rva': rva, 'bytes': image[offset:offset + 32].hex()})
@@ -124,7 +125,7 @@ def fingerprints(image, mode='observe'):
 def verify_live(process, base, records):
     for record in records:
         expected = bytes.fromhex(record['bytes'])
-        if process.read(base + record['rva'], len(expected)) != expected:
+        if process.read(base + at(record['rva']), len(expected)) != expected:
             raise ProbeError(f"Live fingerprint mismatch at {record['rva']:#x}")
 
 
@@ -482,6 +483,8 @@ def main(argv=None, recovery_preflight=None):
         path = process.image_path()
         image = path.read_bytes()
         digest = verify_build(image)
+        if args.mode != 'recover-preparation':
+            require_verified_build()
         base = process.image_base()
         code = fingerprints(image, args.mode)
         verify_live(process, base, code)
@@ -489,7 +492,7 @@ def main(argv=None, recovery_preflight=None):
                     'path': str(path), 'base': hex(base)}
         if identity['birth'] is None:
             raise ProbeError('The game has exited')
-        configuration = {'pid': args.pid, 'base': hex(base), 'fingerprints': code,
+        configuration = {'pid': args.pid, 'base': hex(base), 'fingerprints': code, 'addresses': addresses(),
                          'mode': args.mode, 'duration': args.duration,
                          'lifecycleContent': args.lifecycle_content}
         recovery_source = None
@@ -517,7 +520,7 @@ def main(argv=None, recovery_preflight=None):
         if args.mode in ('trigger', 'resume-preparation'):
             owner, state_object, caller, task = approved_context(
                 args.observation, identity, time.time(), 2 if args.mode == 'resume-preparation' else 1)
-            if caller != hex(base + 0x133EC36):
+            if caller != hex(base + at(0x133EC36)):
                 raise ProbeError('Unrecognized state-update dispatcher')
             configuration.update(owner=owner, stateObject=state_object, caller=caller, task=task)
         args.log.parent.mkdir(parents=True, exist_ok=True)

@@ -9,6 +9,7 @@ import struct
 import subprocess
 
 from NativeCheckpointProbe import TOOLS, ProbeError
+from NativeCodeSignature import at
 from NativeSaveBuffer import ARENA_OFFSET, BODY_OFFSET, NativeSaveBuffer
 from NativeSerializedArena import SerializedArena
 
@@ -168,11 +169,12 @@ def prepare_source(storage, snapshot_id, profile, redeploy=False):
 
 
 def verify_unloaded_menu(process, base):
-    fields = [(base + 0x415ac90 + 0x72c8, b'\0'),
-              (base + 0x415ac90 + 0x520, struct.pack('<i', 2)),
-              (base + 0x9398730, struct.pack('<i', 2))]
-    fields += [(base + 0x9341660 + offset, bytes(4)) for offset in (0x58, 0x228, 0x3f8)]
-    fields.append((base + 0x9341660 + 0x5e0, struct.pack('<i', 20)))
+    run, manager = base + at(0x415ac90), base + at(0x9341660)
+    fields = [(run + 0x72c8, b'\0'),
+              (run + 0x520, struct.pack('<i', 2)),
+              (base + at(0x9398730), struct.pack('<i', 2))]
+    fields += [(manager + offset, bytes(4)) for offset in (0x58, 0x228, 0x3f8)]
+    fields.append((manager + 0x5e0, struct.pack('<i', 20)))
     for address, expected in fields + list(reversed(fields)):
         if process.read(address, len(expected)) != expected:
             raise ProbeError('Native recovery requires the unloaded No Return menu, slot R0A and idle save workers')

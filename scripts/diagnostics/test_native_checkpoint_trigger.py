@@ -10,7 +10,17 @@ import time
 
 from types import SimpleNamespace
 
+import NativeCodeSignature
 from NativeCheckpointTrigger import ProbeError, approved_context, arguments, main, process_birth, stop_guarded_process, supervise_worker, supervised_main, wait_worker
+
+
+def setUpModule():
+    # These tests stand in for a game of the verified build, the one verify_build accepted.
+    NativeCodeSignature.activate(NativeCodeSignature.VERIFIED)
+
+
+def tearDownModule():
+    NativeCodeSignature.activate(None)
 
 
 def hung_worker():

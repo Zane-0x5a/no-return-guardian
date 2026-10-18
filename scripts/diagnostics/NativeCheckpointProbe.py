@@ -13,7 +13,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from InspectPeVa import read_layout, va_to_offset
-from NativeCodeSignature import UNVERIFIED_BUILD, VERIFIED_SHA256, signature_mismatch
+from NativeCodeSignature import UNVERIFIED_BUILD, VERIFIED, VERIFIED_SHA256, activate, active, at, match_build
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,13 +37,21 @@ class ProbeError(RuntimeError):
 
 
 def verify_build(image):
-    """Refuse a build whose code at the native sites differs from the verified one (NativeCodeSignature).
-    Returns the executable's SHA-256, which identifies the build in logs and records."""
+    """Refuse a build whose code at the native sites differs from every known build (NativeCodeSignature),
+    and make the accepted build's addresses the ones this process uses. Returns the executable's SHA-256,
+    which identifies the build in logs and records."""
     digest = hashlib.sha256(image).hexdigest().upper()
-    mismatch = None if digest == VERIFIED_SHA256 else signature_mismatch(image)
-    if mismatch is not None:
+    build, mismatch = (VERIFIED, None) if digest == VERIFIED_SHA256 else match_build(image)
+    if build is None:
         raise ProbeError(f"{UNVERIFIED_BUILD} ({mismatch}); nothing was attached or changed")
+    activate(build)
     return digest
+
+
+def require_verified_build():
+    """The read-only and trigger experiments still name the verified build's addresses directly."""
+    if active() is not VERIFIED:
+        raise ProbeError("This experiment supports only the verified build; nothing was attached or changed")
 
 
 def inspect_current_task(read, base, max_nodes=64, include_simple_fallback=False):
@@ -96,7 +104,7 @@ def inspect_current_task(read, base, max_nodes=64, include_simple_fallback=False
             yield pointer(node + 0x10), visited
             node = pointer(node)
 
-    context = base + 0x9334770
+    context = base + at(0x9334770)
     use_direct = scalar(context, '<B') == 0
     if not use_direct and not include_simple_fallback:
         return finish("fallback_required", 0)
@@ -258,6 +266,7 @@ def main():
         path = process.image_path()
         image = path.read_bytes()
         digest = verify_build(image)
+        require_verified_build()
         base = process.image_base()
         verify_code(process, image, base, args.task)
         print(json.dumps({"event": "read_only_attached", "pid": args.pid,

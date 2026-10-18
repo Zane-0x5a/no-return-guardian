@@ -7,7 +7,17 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+import NativeCodeSignature
 import NativeCheckpointTrigger as host
+
+
+def setUpModule():
+    # These tests stand in for a game of the verified build, the one verify_build accepted.
+    NativeCodeSignature.activate(NativeCodeSignature.VERIFIED)
+
+
+def tearDownModule():
+    NativeCodeSignature.activate(None)
 
 
 class CollectionHostTests(unittest.TestCase):

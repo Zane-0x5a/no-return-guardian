@@ -9,6 +9,12 @@ const RECOVERY_RUN_STATS = ['ca79be3ddf469b1a', '8dd8bbea1823e133', 'e0a765d96d4
 
 function createNativeRecoveryBridge(configuration) {
     const image = Process.mainModule;
+    // This build's address for a native address, named by its RVA in the verified build (NativeCodeSignature).
+    function at(rva) {
+        const actual = (configuration.addresses || {})['0x' + rva.toString(16)];
+        if (!Number.isInteger(actual)) throw new Error(`No native address ${rva.toString(16)} in this build`);
+        return image.base.add(actual);
+    }
     const target = configuration.recoverySource;
     const contract = globalThis.createRecoveryContract();
     const listeners = [];
@@ -79,11 +85,11 @@ function createNativeRecoveryBridge(configuration) {
         try { action(); } catch (error) { fail(error); }
     }
     function state() {
-        const manager = image.base.add(0x9341660);
-        const run = image.base.add(0x415ac90);
+        const manager = at(0x9341660);
+        const run = at(0x415ac90);
         const initialized = run.add(0x72c8).readU8();
         return { runInitialized: initialized, runSelector: run.add(0x520).readS32(),
-            rogue: initialized, story: image.base.add(0x9398730).readS32(),
+            rogue: initialized, story: at(0x9398730).readS32(),
             workerStates: [0x58, 0x228, 0x3f8].map(offset => manager.add(offset).readS32()) };
     }
     function transition(name, fields = {}) {
@@ -153,7 +159,7 @@ function createNativeRecoveryBridge(configuration) {
             }
             if (rva === 0x1b7fc60 && !args[2].isNull()) {
                 boundary.requestStory = args[2].readS32();
-                boundary.profileStory = image.base.add(0x9398790).readS32();
+                boundary.profileStory = at(0x9398790).readS32();
             }
             onEnter.call(this, args);
         }); };
@@ -165,7 +171,7 @@ function createNativeRecoveryBridge(configuration) {
                 onLeave.call(this, result);
             }); }
         } : entry;
-        listeners.push(Interceptor.attach(image.base.add(rva), callbacks));
+        listeners.push(Interceptor.attach(at(rva), callbacks));
     }
     function install(packet) {
         if (configuration.mode !== 'recover-preparation' || Process.arch !== 'x64' ||
@@ -200,27 +206,27 @@ function createNativeRecoveryBridge(configuration) {
         for (const rva of required) {
             const fingerprint = configuration.fingerprints.find(record => record.rva === rva);
             if (!fingerprint || fingerprint.bytes.length !== 64 ||
-                hex(image.base.add(rva).readByteArray(32)) !== fingerprint.bytes) {
+                hex(at(rva).readByteArray(32)) !== fingerprint.bytes) {
                 throw new Error('Recovery live code fingerprint mismatch');
             }
         }
         terminate = new NativeFunction(Module.getGlobalExportByName('TerminateProcess'), 'bool', ['pointer', 'uint'], options);
-        const rootOwner = new NativeFunction(image.base.add(0xfe7b10), 'pointer', [], options);
-        const schedule = new NativeFunction(image.base.add(0xfe96f0), 'void', ['pointer', 'pointer', 'bool'], options);
-        const currentTask = new NativeFunction(image.base.add(0x1b6ea60), 'pointer', ['pointer', 'bool', 'bool'], options);
+        const rootOwner = new NativeFunction(at(0xfe7b10), 'pointer', [], options);
+        const schedule = new NativeFunction(at(0xfe96f0), 'void', ['pointer', 'pointer', 'bool'], options);
+        const currentTask = new NativeFunction(at(0x1b6ea60), 'pointer', ['pointer', 'bool', 'bool'], options);
         owner = rootOwner();
         if (owner.isNull()) throw new Error('Root game is unavailable');
         // Service slot 9 is what set-svar-value and stat-value? resolve. Its constructor stores the base vtable
         // (0x2ab10b) and then the derived one (0x2ab19c); slot 0x20 of both is the setter those natives call.
         // An unrecognized service is never called.
-        const service = image.base.add(0x4248b78).readPointer();
-        if (service.isNull() || !service.readPointer().equals(image.base.add(0x2af57d8)) ||
-            !service.readPointer().add(0x20).readPointer().equals(image.base.add(0x1c57bb0))) {
+        const service = at(0x4248b78).readPointer();
+        if (service.isNull() || !service.readPointer().equals(at(0x2af57d8)) ||
+            !service.readPointer().add(0x20).readPointer().equals(at(0x1c57bb0))) {
             statServiceProblem = 'Profile stat service identity mismatch';
         } else {
             statService = service;
-            findStat = new NativeFunction(image.base.add(0x1c55df0), 'int', ['pointer', 'uint64'], options);
-            setStat = new NativeFunction(image.base.add(0x1c57bb0), 'uint8', ['pointer', 'int', 'uint64', 'uint8'], options);
+            findStat = new NativeFunction(at(0x1c55df0), 'int', ['pointer', 'uint64'], options);
+            setStat = new NativeFunction(at(0x1c57bb0), 'uint8', ['pointer', 'int', 'uint64', 'uint8'], options);
         }
         sourceMemory = Memory.alloc(target.rawSize);
         sourceMemory.writeByteArray(packet.slice(0, target.rawSize));
@@ -235,15 +241,15 @@ function createNativeRecoveryBridge(configuration) {
             if (!scheduled) return;
             if (contract.snapshot().phase === 'awaiting-player-acceptance') return;
             if (contract.snapshot().phase === 'playing' || contract.snapshot().phase === 'queued') return;
-            if (!args[0].equals(image.base.add(0x9341660))) throw new Error('Unexpected save manager');
+            if (!args[0].equals(at(0x9341660))) throw new Error('Unexpected save manager');
             this.initializationSave = contract.snapshot().phase === 'initializing';
             const profileSave = this.initializationSave && args[3].toInt32() === 21;
-            const requestStory = profileSave ? image.base.add(0x9398790).readS32() : 2;
+            const requestStory = profileSave ? at(0x9398790).readS32() : 2;
             if (args[2].isNull() || args[2].readS32() !== requestStory || state().story !== 2) {
                 throw new Error('Native request story does not match its save domain');
             }
             const saveCaller = profileSave ? 0x1b8152f : 0x1b802c3;
-            if (this.initializationSave && !this.returnAddress.equals(image.base.add(saveCaller))) {
+            if (this.initializationSave && !this.returnAddress.equals(at(saveCaller))) {
                 throw new Error('Unexpected native initialization save caller');
             }
             transition(this.initializationSave ? 'initialization-save' : 'request', {
@@ -256,8 +262,8 @@ function createNativeRecoveryBridge(configuration) {
         });
         hook(0x1e2f880, function(args) {
             if (!scheduled) return;
-            if (!this.returnAddress.equals(image.base.add(0x1b82059))) throw new Error('Unexpected native load extraction caller');
-            const worker = image.base.add(0x9341660 + 0x3c0);
+            if (!this.returnAddress.equals(at(0x1b82059))) throw new Error('Unexpected native load extraction caller');
+            const worker = at(0x9341660).add(0x3c0);
             const inner = args[0];
             if (!worker.add(8).readPointer().equals(inner) || worker.add(0x48).readS32() !== 2 ||
                 worker.add(0x4c).readS32() !== 20 || inner.add(4).readS32() !== 2 ||
@@ -267,7 +273,7 @@ function createNativeRecoveryBridge(configuration) {
             }
             const canonicalDescriptor = worker.add(0x10).readPointer();
             if (args[2].toUInt32() !== target.capacity || canonicalDescriptor.add(4).readU32() !== target.capacity ||
-                canonicalDescriptor.readU8() !== 0 || !args[1].equals(image.base.add(0x9341660 + 0x5b0).readPointer())) {
+                canonicalDescriptor.readU8() !== 0 || !args[1].equals(at(0x9341660).add(0x5b0).readPointer())) {
                 throw new Error('Native scratch and canonical descriptors do not match');
             }
             if (hex(inner.add(0x80).readByteArray(40)) !== target.metadataHex) {
@@ -311,7 +317,7 @@ function createNativeRecoveryBridge(configuration) {
                     !args[2].equals(sourceMemory.add(0x590))) throw new Error('Unexpected target load copy');
             } else {
                 if (direction !== 0 || !args[1].equals(cache) || !args[2].equals(temporary) ||
-                    !this.returnAddress.equals(image.base.add(0x1be144e))) throw new Error('Unexpected cache promotion');
+                    !this.returnAddress.equals(at(0x1be144e))) throw new Error('Unexpected cache promotion');
                 verifiedBody(temporary);
                 this.promotion = true;
             }
@@ -336,7 +342,7 @@ function createNativeRecoveryBridge(configuration) {
         hook(0x103f2c0, function(args) {
             this.recoveryInitialize = scheduled;
             if (!this.recoveryInitialize) return;
-            if (!this.returnAddress.equals(image.base.add(0xfd7909))) throw new Error('Unexpected native checkpoint initialization caller');
+            if (!this.returnAddress.equals(at(0xfd7909))) throw new Error('Unexpected native checkpoint initialization caller');
             transition('initialize-enter', { threadId: this.threadId, checkpoint: (args[2].toUInt32() & 255) === 1 });
         }, function() {
             if (this.recoveryInitialize) transition('initialize', { threadId: this.threadId });
@@ -358,7 +364,7 @@ function createNativeRecoveryBridge(configuration) {
             if (!scheduled) {
                 const observed = state();
                 if (observed.runInitialized !== 0 || observed.runSelector !== 2 || observed.story !== 2 ||
-                    observed.workerStates.some(value => value !== 0) || image.base.add(0x9341660 + 0x5e0).readS32() !== 20) {
+                    observed.workerStates.some(value => value !== 0) || at(0x9341660).add(0x5e0).readS32() !== 20) {
                     ticks = 0;
                     return;
                 }
@@ -372,7 +378,7 @@ function createNativeRecoveryBridge(configuration) {
                 }
                 transition('schedule');
                 scheduled = true;
-                schedule(owner, image.base.add(0xfd7870), 1);
+                schedule(owner, at(0xfd7870), 1);
             } else if (contract.snapshot().phase === 'playing' && spawned) {
                 const observed = state();
                 if (observed.runSelector !== contract.snapshot().nativeSelector) {
@@ -380,7 +386,7 @@ function createNativeRecoveryBridge(configuration) {
                 }
                 if (observed.runInitialized !== 1 || observed.rogue !== 1 ||
                     observed.workerStates.some(value => value !== 0)) { readyTicks = 0; return; }
-                const task = currentTask(image.base.add(0x9334770), 0, 0);
+                const task = currentTask(at(0x9334770), 0, 0);
                 if (task.isNull() || task.add(0x120).readPointer().isNull() ||
                     task.add(0x120).readPointer().add(0x6c).readS32() !== 2) { readyTicks = 0; return; }
                 if (++readyTicks < 30) return;

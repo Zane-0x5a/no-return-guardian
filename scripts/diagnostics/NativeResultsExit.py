@@ -10,6 +10,7 @@ import threading
 import time
 
 from NativeCheckpointProbe import FRIDA_DEPS, ProbeError, inspect_current_task
+from NativeCodeSignature import addresses, at
 from NativeRecoverySource import verify_unloaded_menu
 from NativeResultsUi import TransientUiChange, inspect_results_ui
 
@@ -30,9 +31,9 @@ JOURNAL_LIMIT = 262144
 
 
 def observe_results(process, base, attempts=3):
-    fields = ((base + 0x415ac90 + 0x80, '<B'), (base + 0x415ac90 + 0x72c8, '<B'),
-              (base + 0x415ac90 + 0x520, '<i'), (base + 0x9398730, '<i'))
-    fields += tuple((base + 0x9341660 + offset, '<i') for offset in (0x58, 0x228, 0x3f8, 0x5e0))
+    run, manager = base + at(0x415ac90), base + at(0x9341660)
+    fields = ((run + 0x80, '<B'), (run + 0x72c8, '<B'), (run + 0x520, '<i'), (base + at(0x9398730), '<i'))
+    fields += tuple((manager + offset, '<i') for offset in (0x58, 0x228, 0x3f8, 0x5e0))
     for _ in range(attempts):
         payloads = [process.read(address, struct.calcsize(encoding)) for address, encoding in fields]
         active, initialized, selector, story, *workers_slot = [
@@ -195,7 +196,8 @@ class ContinueInjector:
             source = Path(__file__).with_name('NativeResultsContinue.js').read_text(encoding='utf-8')
             configuration = {'mode': 'results-continue', 'pid': pid, 'base': hex(base),
                              'duration': duration, 'maximumInjections': MAXIMUM_PRESSES,
-                             'minimumGapMs': INJECTION_GAP_MS, 'fingerprints': fingerprints}
+                             'minimumGapMs': INJECTION_GAP_MS, 'fingerprints': fingerprints,
+                             'addresses': addresses()}
             self.script = self.session.create_script(
                 'globalThis.nativeResultsContinueConfiguration = ' + json.dumps(configuration) + ';\n' + source)
             self.script.on('message', lambda message, data: self.messages.put(message))
@@ -311,7 +313,7 @@ def finish_results(process, base, pid, birth, log_path, identity_check, fingerpr
             except ProbeError as error:
                 errors.append(str(error))
             injector = None
-            restored = all(process.read(base + hook['rva'], 32) == bytes.fromhex(hook['bytes'])
+            restored = all(process.read(base + at(hook['rva']), 32) == bytes.fromhex(hook['bytes'])
                            for hook in hooks)
             record('results-continue-detached', codeRestored=restored, cleanupErrors=errors)
             if errors or not restored:

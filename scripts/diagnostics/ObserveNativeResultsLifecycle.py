@@ -8,7 +8,7 @@ import threading
 import time
 
 from InspectPeVa import read_layout, va_to_offset
-from NativeCheckpointProbe import ReadOnlyProcess, ProbeError, verify_build
+from NativeCheckpointProbe import ReadOnlyProcess, ProbeError, require_verified_build, verify_build
 from NativeCheckpointTrigger import process_birth
 
 
@@ -53,6 +53,7 @@ def main(argv=None):
         path = process.image_path()
         image = path.read_bytes()
         digest = verify_build(image)
+        require_verified_build()
         base = process.image_base()
         birth = process_birth(process)
         records = fingerprints(image)

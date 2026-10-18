@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 
 from local_evidence import evidence, requires
+import NativeCodeSignature
 from NativeCheckpointProbe import ProbeError
 from NativeCodeSignature import VERIFIED_SHA256
 from NativeDepartureRecord import departure_slots, load_departure, write_departure
@@ -31,6 +32,15 @@ BOARD_FIRST = '0000000000000000000000000200000000000000000000000000000001000000'
 CODE = [{'rva': rva, 'bytes': f'{index:02x}' * 32} for index, rva in enumerate(CONTROL_RVAS, 1)]
 OBSERVED_MS = 1790836977984
 BOUND = 'ab' * 32
+
+
+def setUpModule():
+    # These tests stand in for a game of the verified build, the one verify_build accepted.
+    NativeCodeSignature.activate(NativeCodeSignature.VERIFIED)
+
+
+def tearDownModule():
+    NativeCodeSignature.activate(None)
 
 
 def departure(snapshot='target', **fields):

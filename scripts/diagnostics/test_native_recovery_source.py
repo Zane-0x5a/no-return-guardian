@@ -7,12 +7,22 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import NativeCodeSignature
 from NativeRecoverySource import (DEFAULT_METADATA, OBSERVED_CAPACITY, RUN_PROFILE_STATS, object_entries,
                                   prepare_payload, prepare_source, preparation_code, profile_run_stats,
                                   rollback_failed_recovery, verify_unloaded_menu)
 from NativeSaveBuffer import BODY_OFFSET, ProbeError
 from NativeSerializedArena import SerializedArena
 from local_evidence import requires
+
+
+def setUpModule():
+    # These tests stand in for a game of the verified build, the one verify_build accepted.
+    NativeCodeSignature.activate(NativeCodeSignature.VERIFIED)
+
+
+def tearDownModule():
+    NativeCodeSignature.activate(None)
 
 
 def receipt(manifest, use='hideout'):

@@ -8,7 +8,8 @@ import struct
 import time
 import zipfile
 
-from NativeCheckpointProbe import ReadOnlyProcess, ProbeError, inspect_current_task, verify_build, verify_code
+from NativeCheckpointProbe import (ReadOnlyProcess, ProbeError, inspect_current_task, require_verified_build,
+                                   verify_build, verify_code)
 from NativeCheckpointTrigger import process_birth
 
 
@@ -141,6 +142,7 @@ def main(argv=None):
         path = process.image_path()
         image = path.read_bytes()
         digest = verify_build(image)
+        require_verified_build()
         base = process.image_base()
         verify_code(process, image, base, include_task=True)
 

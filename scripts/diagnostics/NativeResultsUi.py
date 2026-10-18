@@ -3,6 +3,7 @@
 import struct
 
 from NativeCheckpointProbe import ProbeError
+from NativeCodeSignature import at
 
 
 class TransientUiChange(ProbeError):
@@ -53,7 +54,7 @@ def inspect_results_ui(read, base):
         return instance
 
     def has_type(instance, type_rva):
-        type_index = scalar(base + type_rva, '<I')
+        type_index = scalar(base + at(type_rva), '<I')
         if type_index >= 4096:
             raise ProbeError('Unknown results UI type index')
         descriptor = pointer(instance + 0x40)
@@ -88,14 +89,14 @@ def inspect_results_ui(read, base):
             pending.extend(components(child))
         return False
 
-    manager = handle(base + 0x92d08d8)
+    manager = handle(base + at(0x92d08d8))
     if not manager:
         raise ProbeError('Results UI manager is unavailable')
     focus = handle(manager + 0x4c0)
-    bucket_count = scalar(base + 0x37d69b8, '<I')
+    bucket_count = scalar(base + at(0x37d69b8), '<I')
     if not 1 <= bucket_count <= 4096:
         raise ProbeError('Unknown results UI stack registry size')
-    buckets = pointer(base + 0x37d6928)
+    buckets = pointer(base + at(0x37d6928))
     sentinel = pointer(buckets + bucket_count * 8)
     seen = set()
     pages = []

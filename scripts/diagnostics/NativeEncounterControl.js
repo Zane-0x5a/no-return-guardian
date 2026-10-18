@@ -27,6 +27,13 @@ let spawned = false;
 let arrived = 0;
 let seen = 0;
 
+// This build's address for a native address, named by its RVA in the verified build (NativeCodeSignature).
+function at(rva) {
+    const actual = (configuration.addresses || {})['0x' + rva.toString(16)];
+    if (!Number.isInteger(actual)) throw new Error(`No native address ${rva.toString(16)} in this build`);
+    return image.base.add(actual);
+}
+
 function publish(kind, fields = {}) {
     send({ kind, time: Date.now(), mode: configuration.mode, gameTerminationIssued: false, ...fields });
 }
@@ -53,15 +60,15 @@ function hex(data) {
 }
 
 function state() {
-    const run = image.base.add(0x415ac90);
-    const manager = image.base.add(0x9341660);
+    const run = at(0x415ac90);
+    const manager = at(0x9341660);
     return { runActive: run.add(0x80).readU8(), runInitialized: run.add(0x72c8).readU8(),
-        story: image.base.add(0x9398730).readS32(), slot: manager.add(0x5e0).readS32(),
+        story: at(0x9398730).readS32(), slot: manager.add(0x5e0).readS32(),
         workers: [0x58, 0x228, 0x3f8].map(offset => manager.add(offset).readS32()) };
 }
 
 function task() {
-    const current = currentTask(image.base.add(0x9334770), 0, 0);
+    const current = currentTask(at(0x9334770), 0, 0);
     if (current.isNull()) return null;
     const descriptor = current.add(0x120).readPointer();
     if (descriptor.isNull()) return null;
@@ -96,7 +103,7 @@ function issue(sid, slots) {
     publish(configuration.mode === 'redeploy' ? 'redeploy-broadcast' : 'abandon-broadcast',
         { attempt: broadcasts, task: task(), state: state() });
     // The native appends a0..a3 in order and stops at the first slot whose type word is 0.
-    broadcast(image.base.add(0x9342080), sid, slots[0], slots[1] || empty, empty, empty);
+    broadcast(at(0x9342080), sid, slots[0], slots[1] || empty, empty, empty);
 }
 
 function redeploy() {
@@ -146,21 +153,21 @@ function install() {
     for (const rva of required) {
         const fingerprint = configuration.fingerprints.find(item => item.rva === rva);
         if (!fingerprint || fingerprint.bytes.length !== 64 ||
-            hex(image.base.add(rva).readByteArray(32)) !== fingerprint.bytes) {
+            hex(at(rva).readByteArray(32)) !== fingerprint.bytes) {
             throw new Error(`Code fingerprint mismatch: ${rva.toString(16)}`);
         }
     }
     if (configuration.mode === 'record') {
-        listeners.push(Interceptor.attach(image.base.add(0x1b83f70), function(args) {
+        listeners.push(Interceptor.attach(at(0x1b83f70), function(args) {
             guard(() => record.call(this, args));
         }));
         Interceptor.flush();
         publish('encounter-control-installed');
         return;
     }
-    rootOwner = new NativeFunction(image.base.add(0xfe7b10), 'pointer', [], options);
-    currentTask = new NativeFunction(image.base.add(0x1b6ea60), 'pointer', ['pointer', 'bool', 'bool'], options);
-    broadcast = new NativeFunction(image.base.add(0x1b843a0), 'void',
+    rootOwner = new NativeFunction(at(0xfe7b10), 'pointer', [], options);
+    currentTask = new NativeFunction(at(0x1b6ea60), 'pointer', ['pointer', 'bool', 'bool'], options);
+    broadcast = new NativeFunction(at(0x1b843a0), 'void',
         ['pointer', 'uint64', 'pointer', 'pointer', 'pointer', 'pointer'], options);
     owner = rootOwner();
     if (owner.isNull()) throw new Error('Root game is unavailable');
@@ -177,23 +184,23 @@ function install() {
             slot.writeByteArray(text.match(/../g).map(value => parseInt(value, 16)));
             return slot;
         });
-        listeners.push(Interceptor.attach(image.base.add(0x1b6e000), function(args) {
+        listeners.push(Interceptor.attach(at(0x1b6e000), function(args) {
             guard(() => {
                 if (broadcasts === 0 || queued !== null) return;
                 queued = { kind: args[1].readS32(), parameter: args[1].add(0x18).readS32(), threadId: this.threadId };
                 publish('redeploy-queued', queued);
             });
         }));
-        listeners.push(Interceptor.attach(image.base.add(0x1200ac0), function() {
+        listeners.push(Interceptor.attach(at(0x1200ac0), function() {
             guard(() => { if (broadcasts > 0 && !remembered) { remembered = true; publish('redeploy-remembered'); } });
         }));
         // Spawn completion needs the return; the recovery bridge hooks this site the same way.
-        listeners.push(Interceptor.attach(image.base.add(0xdc1780), {
+        listeners.push(Interceptor.attach(at(0xdc1780), {
             onEnter() {},
             onLeave() { guard(() => { if (queued !== null) spawned = true; }); }
         }));
     }
-    listeners.push(Interceptor.attach(image.base.add(0x133ec5e), function() {
+    listeners.push(Interceptor.attach(at(0x133ec5e), function() {
         guard(() => {
             if (!this.context.rbx.equals(owner)) return;
             if (configuration.mode === 'redeploy') redeploy();

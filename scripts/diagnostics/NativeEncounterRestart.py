@@ -14,15 +14,16 @@ import sys
 import time
 
 from NativeCheckpointProbe import FRIDA_DEPS, ProbeError, inspect_current_task, verify_build
+from NativeCodeSignature import addresses, at
 
 
 CONTROL_RVAS = (0x133EC5E, 0x1B843A0, 0x1B83F70, 0x1B6E000, 0xDC1780, 0x1B6EA60, 0xFE7B10, 0x1200AC0)
 
 
 def hideout_state(process, base):
-    run = base + 0x415AC90
+    run = base + at(0x415AC90)
     active, initialized = process.read(run + 0x80, 1)[0], process.read(run + 0x72C8, 1)[0]
-    story = int.from_bytes(process.read(base + 0x9398730, 4), 'little', signed=True)
+    story = int.from_bytes(process.read(base + at(0x9398730), 4), 'little', signed=True)
     try:
         task = inspect_current_task(process.read, base, include_simple_fallback=True)
     except ProbeError:
@@ -42,7 +43,7 @@ def arm_decision(observed):
 
 
 def save_workers(process, base):
-    return [int.from_bytes(process.read(base + 0x9341660 + offset, 4), 'little', signed=True)
+    return [int.from_bytes(process.read(base + at(0x9341660) + offset, 4), 'little', signed=True)
             for offset in (0x58, 0x228, 0x3f8)]
 
 
@@ -107,11 +108,12 @@ def control_configuration(mode, pid, base, fingerprints, duration, **fields):
     hooks = [item for item in fingerprints if item['rva'] in CONTROL_RVAS]
     if sorted(item['rva'] for item in hooks) != sorted(CONTROL_RVAS):
         raise ProbeError('Encounter control fingerprints are incomplete')
-    return {'mode': mode, 'pid': pid, 'base': hex(base), 'duration': duration, 'fingerprints': hooks, **fields}
+    return {'mode': mode, 'pid': pid, 'base': hex(base), 'duration': duration, 'fingerprints': hooks,
+            'addresses': addresses(), **fields}
 
 
 def code_restored(process, base, fingerprints):
-    return all(process.read(base + item['rva'], 32) == bytes.fromhex(item['bytes'])
+    return all(process.read(base + at(item['rva']), 32) == bytes.fromhex(item['bytes'])
                for item in fingerprints if item['rva'] in CONTROL_RVAS)
 
 

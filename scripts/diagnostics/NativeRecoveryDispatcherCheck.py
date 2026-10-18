@@ -8,6 +8,7 @@ import sys
 import threading
 
 from InspectPeVa import read_layout, va_to_offset
+from NativeCodeSignature import VERIFIED, native_addresses
 from NativeRecoverySource import prepare_source
 
 
@@ -136,7 +137,7 @@ function fixtureNativeFunction(address,...args){
 }
 const configuration={pid:Process.id,base:imageBase.toString(),mode:'recover-preparation',recoverySource:SOURCE_CONFIG,
     fingerprints:rvas.map(rva=>({rva,bytes:Array.from(new Uint8Array(imageBase.add(rva).readByteArray(32)),
-        value=>value.toString(16).padStart(2,'0')).join('')}))};
+        value=>value.toString(16).padStart(2,'0')).join('')})),addresses:VERIFIED_ADDRESSES};
 const module=new CModule(`extern void update(void *owner);
 unsigned int run(void *owner){for(unsigned int index=0;index<100;index++)update(owner);return 0;}`,{update:dispatcher});
 '''
@@ -179,6 +180,8 @@ def check(image_path, hook, source=None, failure_path=None):
             javascript = JAVASCRIPT.replace('CODE', json.dumps(list(code))).replace('HOOK', str(hook).lower())
         else:
             setup = BRIDGE_SETUP.replace('CODE', json.dumps(list(code))).replace('SOURCE_CONFIG', json.dumps(source.configuration))
+            # The disposable process maps the verified build, so every native address is where it is named.
+            setup = setup.replace('VERIFIED_ADDRESSES', json.dumps({hex(rva): VERIFIED.at(rva) for rva in native_addresses()}))
             if failure_path is not None:
                 setup = setup.replace("if(address.equals(termination))return ()=>{attemptedTermination=true;throw new Error('Owned termination intercepted');};",
                     "if(address.equals(imageBase.add(0xfe96f0)))return ()=>{throw new Error('owned-durable-failure');};")

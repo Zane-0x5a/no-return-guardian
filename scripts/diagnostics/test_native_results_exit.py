@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, call, patch
 
+import NativeCodeSignature
 from NativeCheckpointProbe import ProbeError
 from NativeResultsExit import CONTINUE_RVAS, ResultsExit, SessionPrefetch, finish_results, observe_results
 from NativeResultsUi import TransientUiChange, inspect_results_ui, string_id
@@ -14,6 +15,15 @@ from local_evidence import requires
 HOOKS = [{'rva': rva, 'bytes': f'{index:02x}' * 32} for index, rva in enumerate(CONTINUE_RVAS, 1)]
 RUN_FIELDS = (0x415ac90 + 0x80, 0x415ac90 + 0x72c8, 0x415ac90 + 0x520, 0x9398730,
               0x9341660 + 0x58, 0x9341660 + 0x228, 0x9341660 + 0x3f8, 0x9341660 + 0x5e0)
+
+
+def setUpModule():
+    # These tests stand in for a game of the verified build, the one verify_build accepted.
+    NativeCodeSignature.activate(NativeCodeSignature.VERIFIED)
+
+
+def tearDownModule():
+    NativeCodeSignature.activate(None)
 
 
 def results(page='t2r-menu-post/page-scores'):

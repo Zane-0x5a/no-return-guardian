@@ -2,7 +2,17 @@ import struct
 import unittest
 from unittest.mock import patch
 
+import NativeCodeSignature
 from NativeCheckpointProbe import ProbeError, inspect_current_task, verify_code
+
+
+def setUpModule():
+    # These tests stand in for a game of the verified build, the one verify_build accepted.
+    NativeCodeSignature.activate(NativeCodeSignature.VERIFIED)
+
+
+def tearDownModule():
+    NativeCodeSignature.activate(None)
 
 
 class TaskMemory:

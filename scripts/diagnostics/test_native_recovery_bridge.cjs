@@ -6,6 +6,9 @@ const test = require('node:test');
 const { requires } = require('./local_evidence.cjs');
 const vm = require('node:vm');
 
+// The verified build: every native address is where NativeCodeSignature names it.
+const identityAddresses = new Proxy({}, { get: (_, key) => /^0x[0-9a-f]+$/.test(key) ? parseInt(key, 16) : undefined });
+
 const capacity = 0x460414;
 const rawSize = capacity + 0x590;
 const metadata = '00000000ffffffffffffffff0000000000000000ff000000000000000000000000000100ffffffff';
@@ -115,7 +118,8 @@ function fixture(options = {}) {
             metadataHex: metadata, snapshotId: 'target',
             runStats: options.runStats === undefined ?
                 runStatSids.map((sid, index) => ({ sid, value: protectedStats[index] })) : options.runStats },
-        fingerprints: options.missingCode ? [] : rvas.map(rva => ({ rva, bytes: '00'.repeat(32) })) };
+        fingerprints: options.missingCode ? [] : rvas.map(rva => ({ rva, bytes: '00'.repeat(32) })),
+        addresses: identityAddresses };
     const context = { Process: { id: options.wrongPid ? 12 : 11, arch: 'x64',
         mainModule: { name: 'tlou-ii.exe', base: new Pointer(base) } },
         ptr: value => new Pointer(value), uint64: value => BigInt(value),

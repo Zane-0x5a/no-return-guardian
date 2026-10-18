@@ -4,6 +4,9 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
+// The verified build: every native address is where NativeCodeSignature names it.
+const identityAddresses = new Proxy({}, { get: (_, key) => /^0x[0-9a-f]+$/.test(key) ? parseInt(key, 16) : undefined });
+
 const source = fs.readFileSync(path.join(__dirname, 'NativeEncounterControl.js'), 'utf8');
 const base = 0x140000000;
 const required = [0x133ec5e, 0x1b843a0, 0x1b83f70, 0x1b6e000, 0xdc1780, 0x1b6ea60, 0xfe7b10, 0x1200ac0];
@@ -95,7 +98,8 @@ function fixture(mode, extra = {}) {
     };
     const context = {
         nativeEncounterConfiguration: { mode, pid: 42, base: `0x${base.toString(16)}`, duration: 60,
-            fingerprints: required.map(rva => ({ rva, bytes: '00'.repeat(32) })), settleUpdates: 3,
+            fingerprints: required.map(rva => ({ rva, bytes: '00'.repeat(32) })), addresses: identityAddresses,
+            settleUpdates: 3,
             retryMs: 1000, maximumBroadcasts: 2, slots: slot, ...extra },
         Process: { id: 42, arch: 'x64', mainModule: { name: 'tlou-ii.exe', base: memory.pointer(base), size: 0x40000000 } },
         Interceptor: {
