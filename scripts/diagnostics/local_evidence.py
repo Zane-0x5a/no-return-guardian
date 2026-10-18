@@ -32,3 +32,14 @@ def game_executable():
     except (OSError, ValueError):
         return None
     return Path(learned) if learned else None
+
+
+def verified_executable():
+    """The verified build's executable: the copy kept under artifacts/, otherwise game_executable()."""
+    kept = evidence('verified-build-20250413/tlou-ii.exe')
+    return kept if kept.is_file() else game_executable()
+
+
+def build_executables(name):
+    """The executables of a later build (NativeCodeSignature.BUILDS) kept under artifacts/build-<name>/."""
+    return sorted(path for path in evidence(f'build-{name}').glob('tlou-ii.*') if path.suffix in ('.exe', '.rne'))

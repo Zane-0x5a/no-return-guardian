@@ -31,13 +31,17 @@ CODE_BYTES = 32
 # and the profile stat service's vtable through slot 9, whose setter the bridge calls.
 EXTRA_SITES = ((0xFD7909 - 8, 16), (0x1B802C3 - 8, 16), (0x1B8152F - 8, 16), (0x1B82059 - 8, 16),
                (0x1BE144E - 8, 16), (0x2AF57D8, 0x50))
-# Every return address a native mode compares a caller with; the last only in the trigger experiments.
-RETURN_ADDRESSES = (0xFD7909, 0x1B802C3, 0x1B8152F, 0x1B82059, 0x1BE144E, 0x133EC36)
-# Data the native modes read, compare or hand to the game: the run and save managers, the Rogue and mode
-# flags, the task context, the broadcast target, the profile stat service and its vtable, and the results
-# UI's manager, hash table and page types. None of it is pinned: it is game state, not code.
-DATA_ADDRESSES = (0x415AC90, 0x415AD30, 0x4161F58, 0x9334770, 0x9341660, 0x9342080, 0x9398730, 0x9398790,
-                  0x4248B78, 0x2AF57D8, 0x92D08D8, 0x37D6928, 0x37D69B8, 0x9493978, 0x9493BA8, 0x9497E88)
+# Every return address a native mode compares a caller with: the recovery bridge's, and one only the trigger
+# experiments compare.
+BRIDGE_RETURNS = (0xFD7909, 0x1B802C3, 0x1B8152F, 0x1B82059, 0x1BE144E)
+RETURN_ADDRESSES = BRIDGE_RETURNS + (0x133EC36,)
+# Data the product's native modes read, compare or hand to the game: the run and save managers, the task
+# context, the broadcast target, the profile stat service and its vtable, and the results UI's manager, hash
+# table and page types. None of it is pinned: it is game state, not code.
+PRODUCT_DATA = (0x415AC90, 0x9334770, 0x9341660, 0x9342080, 0x9398730, 0x9398790, 0x4248B78, 0x2AF57D8,
+                0x92D08D8, 0x37D6928, 0x37D69B8, 0x9493978, 0x9493BA8, 0x9497E88)
+# With the Rogue and mode flags the experiments read.
+DATA_ADDRESSES = PRODUCT_DATA + (0x415AD30, 0x4161F58)
 VTABLES = ((0x2AF57D8, 0x50),)
 
 
@@ -56,6 +60,18 @@ def code_addresses():
 def native_addresses():
     """Every address of the verified build the native scripts use."""
     return code_addresses() | frozenset(DATA_ADDRESSES)
+
+
+@cache
+def product_addresses():
+    """The addresses Guardian's native modes use: recovery, the results continue, encounter control and the
+    departure recorder. Every later build must have all of them; the rest serve experiments, which refuse any
+    build but the verified one (NativeCheckpointProbe.require_verified_build)."""
+    from NativeCheckpointTrigger import ENCOUNTER_RVAS, RECOVERY_RVAS, RESULTS_RVAS
+    from NativeEncounterRestart import CONTROL_RVAS
+    from NativeResultsExit import CONTINUE_RVAS
+    return frozenset(rva for group in (RECOVERY_RVAS, RESULTS_RVAS, ENCOUNTER_RVAS, CONTROL_RVAS, CONTINUE_RVAS,
+                                       BRIDGE_RETURNS, PRODUCT_DATA) for rva in group)
 
 
 @dataclass(frozen=True)
@@ -170,7 +186,164 @@ PINNED = {
 
 
 VERIFIED = Build('verified', SECTIONS, PINNED)
-BUILDS = (VERIFIED,)
+# Steam build 19297819, game version v1.6.10721 (June 2026). Relocated from the verified build by
+# RelocateNativeBuild.py, with the changed functions scripts/native-builds.json records as reviewed.
+V1_6_10721 = Build(
+    'v1.6.10721',
+    {'.text': 0x1000, '.rdata': 0x2a8c000, '.data': 0x3541000, '.pdata': 0x965a000, '_RDATA': 0x984a000, '.rsrc': 0x985e000, '.reloc': 0x99cf000},
+    {
+        0xd4c610: '405356574881ec80000000488b0516ccb3024833c44889442470488bf1c5f9ef',
+        0xd4c710: '405356574881ec80000000488b0516cbb3024833c44889442470488bf1c5f9ef',
+        0xd98610: '488bc448894808555356574154415541564157488d68a14881eca8000000c5f8',
+        0xd997d0: '48895c2410574883ec30488bd9488d05a431f60148890133d2e802f8d3ff33d2',
+        0xdb2a30: '48895c24205556574154415541564157488d6c24d94881ecb0000000488b05e5',
+        0xdb2f80: '48895c240848896c24104889742418574883ec40498bf1498bf8488bea488bd9',
+        0xdc4860: '4053565741544155415641574881ec70020000c5f829b42460020000488b05b5',
+        0xfdab10: '40534881ecb0000000488b0518e78a024833c448898424a00000004c8b05f681',
+        0xfdaba1: '811803e8c77b0600c5f9efc0c5fc1144',
+        0xfeadd0: '4883ec28e81734b5004c8bc833c04d85c97423448b056e9e1503498b4940418b',
+        0xfeca10: '40534883ec20488bd948899150140b0044888149140b00e86421b500488b1525',
+        0x1042770: '48895c24104889742418574883ec308bfa488bd980b9c8720000000f859a0200',
+        0x1045b30: '48895c2410488974241848897c24205541564157488d6c24a04881ec60010000',
+        0x1045f50: '40534883ec60488b05db3284024833c448894424584533c0488d0de1682f0833',
+        0x1046030: '40574883ec40488b05fb3184024833c448894424304533c0488d0d01682f0833',
+        0x1046970: '4883ec68488b05bd2884024833c448894424584533c0488d0dc35e2f0833d2e8',
+        0x1049740: '48895c2410488974241848897c2420554154415541564157488dac2420feffff',
+        0x104a430: '4883ec284533c0488d0d12242f0833d2e8cb96b2004885c07413488b80200100',
+        0x104a470: '4883ec284533c0488d0dd2232f0833d2e88b96b2004885c07413488b80200100',
+        0x104b9d0: '48895c2408574883ec20c681c872000000488bd9c78120050000020000004881',
+        0x104be10: '488951504c894158c3ccccccccccccccc4c17c1000c5fc1181c80400008991e8',
+        0x104d0a0: '48895c2410488974241848897c2420554154415541564157488d6c24904881ec',
+        0x104fbb0: '33c03805983111030f95c0488901488bc1c3cccccccccccccccccccccccccccc',
+        0x1061eb0: '48895c2408574883ec20803dd7801003000fb6da488bf97421488d0d000e1003',
+        0x1062e10: '48897c24185541564157488d6c24b94881ecb0000000488b050b6482024833c4',
+        0x11fca90: '48895c240848896c24104889742418574883ec30418bd88bfa488bf1488d2d8d',
+        0x1204260: '48895c241055565741544155415641574881ec90000000c5f829b42480000000',
+        0x120e7e0: '40555356574154415541564157488d6c24e84881ec18010000488b0538aa6702',
+        0x1210960: '40535557415441574883ec408b9c24980000004d8be18bbc24900000004d8bf8',
+        0x1211390: '488b02488b400848051b0400004883e0f8c3cccccccccccccccccccccccccccc',
+        0x124acf0: '40534883ec20488bc2488bd94885d27423803a00741e48ba25232284e49cf2cb',
+        0x124fc80: '0fb60184c0741f49b8b3010000000100000fb6c0488d49014833d00fb601490f',
+        0x1340b10: '488b81800000004885c0740e488b40304885c07405488b4008c333c0c3cccccc',
+        0x1340b50: '488b81800000004885c0740e488b40384885c07405488b4008c333c0c3cccccc',
+        0x1341db0: '40534883ec20488bd9e8d2d62200c5f057c9c5f82fc1770a807b09000f8c9e00',
+        0x1341e5e: '806308df900fb64309c0e8052401884332904883c4205bc3cccccccccccccccc',
+        0x1b3c1f0: '4053574883ec78488b053ad0d4014833c44889442468488bf9c5f9efc033c0c5',
+        0x1b3c3a0: '405356574881ec80000000488b0586ced4014833c44889442470488bf9c5f9ef',
+        0x1b3ec80: '4883ec28488b0d9dfdc9014c8bc233d2418bc0f7f14863c2488b15f9fcc90148',
+        0x1b730b0: '48895c2410564883ec30448b8160020000488bda33d2488bf14585c07457448b',
+        0x1b73b10: '48895c240848896c24104889742418574883ec20803d258d7c0700410fb6f00f',
+        0x1b83e00: '4883b9a805000000742133c04883c1588b1185d2740583fa077c1348ffc04881',
+        0x1b86a00: '40555356574154415541564157488d6c24d84881ec280100004963f9897c2434',
+        0x1b86e20: '40534881ec9000000033c0c7442438ffffffff83b9e005000014488bd9488944',
+        0x1b8705b: 'c5f877e89df9ffff84c074074488bbc8',
+        0x1b882c7: 'c5f877e831e7ffff4881c498000000c3',
+        0x1b88e18: '8b4f08e860c92a0084c00f85e6000000',
+        0x1b8ada0: '48895c240848896c242056574154415641574883ec70488b057be4cf014833c4',
+        0x1b8b1d0: '48895c240848896c241056574154415641574881ec80010000488b0548e0cf01',
+        0x1be08c0: '48895c24185556574883ec70488b056589ca014833c44889442460410fb6d941',
+        0x1be4950: '48895c24105556574154415541564157488dac2420ffffff4881ece001000048',
+        0x1be5490: '4883ec38488b02488bd14889442448488d0daa737507488b4424604889442428',
+        0x1be72d6: '0000ff9080000000488b742448488b6c',
+        0x1c5b87c: '498b16488bc8488bf0e8a603000085c0780f4863c8488b4630488d14498b7cd0',
+        0x1c5bc30: '48895c2410488974241855574156488d6c24b94881ecb0000000448b91800200',
+        0x1c5d9b0: '48895c241048896c2418565741574883ec20448bfa410fb6e9498bd0498bd848',
+        0x1e35780: '4883ec3883790c02488bc2740732c04883c438c3448b414841b902000000488b',
+        0x1e3bc60: '33c04885c97425448b0dcafe6507488b5140458bc149c1e9064183e03fc422bb',
+        0x1e3f560: '33c04885c97425448b0dfac76507488b5140458bc149c1e9064183e03fc422bb',
+        0x1e3f780: '4883ec28e8474f0100488bc8e8cfc4ffff4885c0741ef680a108000001741748',
+        0x1e41820: '48895c242055565741544155415641574883ec60488b05fd79a4014833c44889',
+        0x1e53260: '48895c24184889742420574881ec50040000488b05bf5fa3014833c448898424',
+        0x1e544e0: '4883ec28e827c64eff4885c07427448b05d3ba6407488b4840418bd048c1ea06',
+        0x1e546d0: '40534883ec20e805feffff488bd84885c07420488bc8e8d50000004885c07410',
+        0x1e547c0: '4883ec28e887c34eff4885c07427448b05f3b76407488b4840418bd048c1ea06',
+        0x2afb818: 'e0d533400100000050d7334001000000d0d7334001000000f0d7334001000000b0d9c5410100000050d7c5410100000000c5c54101000000f0c3c5410100000090afc5410100000080d0c54101000000',
+    },
+    {
+        0xd49530: 0xd4c610,
+        0xd49630: 0xd4c710,
+        0xd95530: 0xd98610,
+        0xd966f0: 0xd997d0,
+        0xdaf950: 0xdb2a30,
+        0xdafea0: 0xdb2f80,
+        0xdc1780: 0xdc4860,
+        0xfd7870: 0xfdab10,
+        0xfd7909: 0xfdaba9,
+        0xfe7b10: 0xfeadd0,
+        0xfe96f0: 0xfeca10,
+        0x103f2c0: 0x1042770,
+        0x1042680: 0x1045b30,
+        0x1042aa0: 0x1045f50,
+        0x1042b80: 0x1046030,
+        0x10434c0: 0x1046970,
+        0x1046290: 0x1049740,
+        0x1046f80: 0x104a430,
+        0x1046fc0: 0x104a470,
+        0x1048520: 0x104b9d0,
+        0x1048960: 0x104be10,
+        0x1049bf0: 0x104d0a0,
+        0x104c700: 0x104fbb0,
+        0x105e930: 0x1061eb0,
+        0x105f830: 0x1062e10,
+        0x11f9300: 0x11fca90,
+        0x1200ac0: 0x1204260,
+        0x120af40: 0x120e7e0,
+        0x120d090: 0x1210960,
+        0x120dac0: 0x1211390,
+        0x1247360: 0x124acf0,
+        0x124c1d0: 0x124fc80,
+        0x133d910: 0x1340b10,
+        0x133d950: 0x1340b50,
+        0x133ebb0: 0x1341db0,
+        0x133ec36: 0x1341e36,
+        0x133ec5e: 0x1341e5e,
+        0x1b37160: 0x1b3c1f0,
+        0x1b37310: 0x1b3c3a0,
+        0x1b39bf0: 0x1b3ec80,
+        0x1b6e000: 0x1b730b0,
+        0x1b6ea60: 0x1b73b10,
+        0x1b7d080: 0x1b83e00,
+        0x1b7fc60: 0x1b86a00,
+        0x1b80080: 0x1b86e20,
+        0x1b802c3: 0x1b87063,
+        0x1b8152f: 0x1b882cf,
+        0x1b82059: 0x1b88e20,
+        0x1b83f70: 0x1b8ada0,
+        0x1b843a0: 0x1b8b1d0,
+        0x1bdb630: 0x1be08c0,
+        0x1bdeed0: 0x1be4950,
+        0x1bdf840: 0x1be5490,
+        0x1be144e: 0x1be72de,
+        0x1c55a3c: 0x1c5b87c,
+        0x1c55df0: 0x1c5bc30,
+        0x1c57bb0: 0x1c5d9b0,
+        0x1e2f880: 0x1e35780,
+        0x1e35d60: 0x1e3bc60,
+        0x1e39660: 0x1e3f560,
+        0x1e39880: 0x1e3f780,
+        0x1e3b920: 0x1e41820,
+        0x1e4df10: 0x1e53260,
+        0x1e4f190: 0x1e544e0,
+        0x1e4f380: 0x1e546d0,
+        0x1e4f470: 0x1e547c0,
+        0x2af57d8: 0x2afb818,
+        0x37d6928: 0x37de998,
+        0x37d69b8: 0x37dea28,
+        0x415ac90: 0x4162cd0,
+        0x415ad30: 0x4162d70,
+        0x4161f58: 0x4169f98,
+        0x4248b78: 0x4250bf8,
+        0x92d08d8: 0x92d89b8,
+        0x9334770: 0x933c850,
+        0x9341660: 0x934bfa0,
+        0x9342080: 0x934c9c0,
+        0x9398730: 0x93a0910,
+        0x9398790: 0x93a0970,
+        0x9493978: 0x949bb38,
+        0x9493ba8: 0x949bd68,
+        0x9497e88: 0x949ffc8,
+    })
+BUILDS = (VERIFIED, V1_6_10721)
 
 
 def match_build(image):

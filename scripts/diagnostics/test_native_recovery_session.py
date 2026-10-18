@@ -9,7 +9,7 @@ import tempfile
 
 from NativeRecoverySession import read_failure_evidence, watch_recovery_session
 from NativeCheckpointProbe import ProbeError
-from local_evidence import game_executable, requires
+from local_evidence import requires, verified_executable
 
 
 class RecoverySessionTests(unittest.TestCase):
@@ -22,7 +22,7 @@ class RecoverySessionTests(unittest.TestCase):
         snapshot = '20260912-072519061-manual-62fed724'
         manifest = json.loads((storage / 'snapshots' / snapshot / 'manifest.json').read_text(encoding='utf-8'))
         source = prepare_source(storage, snapshot, manifest['SourceProfilePath'])
-        executable = game_executable()
+        executable = verified_executable()
         if executable is None or not executable.is_file():
             self.skipTest('set NRG_GAME_EXE to the verified game executable')
         with tempfile.TemporaryDirectory() as directory:

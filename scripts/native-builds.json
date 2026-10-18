@@ -1,0 +1,34 @@
+{
+  "v1.6.10721": {
+    "executables": {
+      "5BAB2DCCF313B1B89F41957AAB679A618BE8A135E65CFF9BFD40CE0069EC8D31": "Steam build 19297819 (issue #2)",
+      "AD2E89FEA79AD41668039D0D8CC940311E41C5AFDD5CA8F614181DE8AFE0CC82": "the same build with a 6-byte patch outside every pinned site"
+    },
+    "reviewed": {
+      "0xfd7870": {
+        "counterpart": "0xfdab10",
+        "reason": "Checkpoint callback, same size: only the game-info object's field 0x48dc moved to 0x48e4. Its calls (teardown, initialize, queue) are unchanged. The bridge schedules it and observes its entry; 0xfd7909 returns from its one initialize call."
+      },
+      "0x120af40": {
+        "counterpart": "0x120e7e0",
+        "reason": "Save apply, same size and same argument handling at entry: only game-info fields from 0x4838 moved by 8 to 16 bytes, and one popcount loop was reordered. The bridge reads args[1] (descriptor) and args[3] at entry."
+      },
+      "0x1200ac0": {
+        "counterpart": "0x1204260",
+        "reason": "Remember checkpoint: different register allocation and assertion line numbers. Encounter control only observes its entry."
+      },
+      "0x1b80144": {
+        "counterpart": "0x1b86ee4",
+        "reason": "Part of the run save request caller: only an assertion line number changed (0x95a to 0x962). 0x1b802c3 returns from its one save request call."
+      },
+      "0x1b81ac0": {
+        "counterpart": "0x1b88860",
+        "reason": "Save worker state machine: its error-code handling was rearranged, but it reads the same worker and request fields. The load extraction is still called once, with the same arguments from the worker; 0x1b82059 returns from that call."
+      },
+      "0x1bdeed0": {
+        "counterpart": "0x1be4950",
+        "reason": "Task play: a new check of the game-info object and the task's word before playing. The third argument still goes to r14d, and the task+0x120/+0x90 reads are unchanged. The bridge reads only args[2] at entry."
+      }
+    }
+  }
+}

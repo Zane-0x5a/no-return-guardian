@@ -12,7 +12,7 @@ from NativeCheckpointTrigger import (CODE_RVAS, COLLECTION_RVAS, ENCOUNTER_RVAS,
                                      RECOVERY_RVAS, RESULTS_RVAS, RESUME_RVAS)
 from NativeEncounterRestart import CONTROL_RVAS
 from NativeResultsExit import CONTINUE_RVAS
-from local_evidence import game_executable
+from local_evidence import build_executables, verified_executable
 
 HERE = Path(__file__).resolve().parent
 # The native scripts a release ships for the product's modes (scripts\build-native-recovery.ps1).
@@ -98,6 +98,15 @@ class CodeSignatureTests(unittest.TestCase):
             changed[0x400 + 0x28] ^= 0xFF
             self.assertEqual(NativeCodeSignature.signature_mismatch(bytes(changed)), 'code at 0x1020')
 
+    def test_every_later_build_has_every_address_the_product_uses(self):
+        product, native = NativeCodeSignature.product_addresses(), NativeCodeSignature.native_addresses()
+        self.assertLess(product, native)
+        for build in NativeCodeSignature.BUILDS[1:]:
+            with self.subTest(build=build.name):
+                self.assertEqual([hex(rva) for rva in sorted(product) if not build.has(rva)], [])
+                self.assertLessEqual(set(build.relocation), native)
+                self.assertNotEqual(build.sections, NativeCodeSignature.SECTIONS)
+
     def test_the_verified_build_names_every_native_address_where_it_is(self):
         NativeCodeSignature.activate(NativeCodeSignature.VERIFIED)
         native = NativeCodeSignature.native_addresses()
@@ -105,7 +114,7 @@ class CodeSignatureTests(unittest.TestCase):
         self.assertRaises(ValueError, NativeCodeSignature.at, 0x4166E90)
 
     def test_the_shipped_scripts_reach_game_addresses_only_through_the_build_table(self):
-        native = NativeCodeSignature.native_addresses()
+        native, product = NativeCodeSignature.native_addresses(), NativeCodeSignature.product_addresses()
 
         def address(node):
             return isinstance(node, ast.Constant) and type(node.value) is int and node.value in ADDRESS_RANGE
@@ -115,7 +124,8 @@ class CodeSignatureTests(unittest.TestCase):
             with self.subTest(script=name):
                 self.assertEqual([line.strip() for line in lines if re.search(r'image\.base\.add\((?!actual\))', line)], [])
                 literals = {int(literal, 16) for line in lines for literal in re.findall(r'\b0x[0-9a-f]+\b', line)}
-                self.assertEqual({hex(value) for value in literals if value in ADDRESS_RANGE and value not in native},
+                # The Frida scripts serve only the product's modes, so every later build has their addresses.
+                self.assertEqual({hex(value) for value in literals if value in ADDRESS_RANGE and value not in product},
                                  set())
         for name in SHIPPED_PYTHON:
             tree = ast.parse((HERE / name).read_text(encoding='utf-8'))
@@ -131,13 +141,23 @@ class CodeSignatureTests(unittest.TestCase):
                                          f'{name}:{node.lineno} adds a raw game address')
 
     def test_the_verified_build_matches_its_own_table(self):
-        executable = game_executable()
+        executable = verified_executable()
         if executable is None or not executable.is_file():
-            self.skipTest('set NRG_GAME_EXE to the verified game executable')
+            self.skipTest('keep the verified build in artifacts/verified-build-20250413 or set NRG_GAME_EXE')
         image = executable.read_bytes()
         if hashlib.sha256(image).hexdigest().upper() != NativeCodeSignature.VERIFIED_SHA256:
             self.skipTest('the local game is not the verified build')
-        self.assertIsNone(NativeCodeSignature.signature_mismatch(image))
+        self.assertEqual(NativeCodeSignature.match_build(image), (NativeCodeSignature.VERIFIED, None))
+
+    def test_every_later_build_matches_its_own_table(self):
+        for build in NativeCodeSignature.BUILDS[1:]:
+            executables = build_executables(build.name)
+            if not executables:
+                self.skipTest(f'keep the {build.name} build in artifacts/build-{build.name}')
+            for executable in executables:
+                with self.subTest(executable=executable.name):
+                    self.assertEqual(NativeCodeSignature.match_build(executable.read_bytes()), (build, None))
+                    self.assertEqual(NativeCodeSignature.VERIFIED.mismatch(executable.read_bytes()), 'section layout')
 
 
 if __name__ == '__main__':
