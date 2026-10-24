@@ -91,6 +91,9 @@ namespace NoReturnGuardian.Core
             return string.Equals(basis, PreDepartureSave, StringComparison.Ordinal) || IsRunStartBasis(basis);
         }
 
+        /// <summary>Optional recorder-created JSON observation kept under departure staging.</summary>
+        public string SkillObservationPath { get; set; }
+
         public static bool IsRunStartBasis(string basis)
         {
             return string.Equals(basis, RunStartSave, StringComparison.Ordinal)
@@ -231,6 +234,8 @@ namespace NoReturnGuardian.Core
         /// after the departure (see there).
         /// </summary>
         public string DepartureBasis { get; set; }
+        /// <summary>Recorder-side event observation used to complete a verified Ellie opening tree.</summary>
+        public SkillProtection SkillProtection { get; set; }
         /// <summary>
         /// Present when the captured run save had lost its trading-station stock and the stock of an earlier
         /// save of the same draw was written back into Guardian's copy (see <see cref="VendorStockRepair"/>).
@@ -253,6 +258,7 @@ namespace NoReturnGuardian.Core
         public uint WorkingRunCounter { get; set; }
         public int WorkingRunStateOffset { get; set; }
         public string WorkingRunStateSignal { get; set; }
+        public bool SkillStateUnavailable { get; set; }
 
         public DateTime CreatedUtc
         {
@@ -327,6 +333,7 @@ namespace NoReturnGuardian.Core
         {
             return record != null
                 && record.StructurallyValid
+                && !record.SkillStateUnavailable
                 && record.Manifest != null
                 && WorkingRunStateSignals.IsRecognized(record.WorkingRunStateSignal)
                 && string.Equals(
@@ -361,7 +368,7 @@ namespace NoReturnGuardian.Core
                     SaveLayout.GameRunPath,
                     StringComparison.OrdinalIgnoreCase));
             return manifest != null
-                && manifest.SchemaVersion == 5
+                && manifest.SchemaVersion >= 5
                 && string.Equals(
                     manifest.PreparationConfirmation,
                     PreparationConfirmations.NativeDepartureObserved,
@@ -392,7 +399,7 @@ namespace NoReturnGuardian.Core
                 // The bound save is the copy before a lost trading-station stock was returned into it.
                 && string.Equals(
                     manifest.DepartureRunSha256,
-                    manifest.VendorStockRepair == null ? run.Sha256 : manifest.VendorStockRepair.OriginalRunSha256,
+                    BoundRunHash(manifest, run.Sha256),
                     StringComparison.OrdinalIgnoreCase)
                 && (manifest.DepartureBasis == null
                     || string.Equals(manifest.DepartureBasis, DepartureEvidence.PreDepartureSave, StringComparison.Ordinal)
@@ -475,10 +482,24 @@ namespace NoReturnGuardian.Core
             }
 
             return nativeExport
-                && !string.IsNullOrWhiteSpace(manifest.ProfileSlotStateCode)
-                && manifest.ProfileSlotStateCode.Length == 24
-                && !string.IsNullOrWhiteSpace(manifest.ProfileSlotExportSha256)
-                && manifest.ProfileSlotExportSha256.Length == 64;
+                ? !string.IsNullOrWhiteSpace(manifest.ProfileSlotStateCode)
+                    && manifest.ProfileSlotStateCode.Length == 24
+                    && !string.IsNullOrWhiteSpace(manifest.ProfileSlotExportSha256)
+                    && manifest.ProfileSlotExportSha256.Length == 64
+                : manifest.SchemaVersion >= 7;
+        }
+
+        private static string BoundRunHash(SnapshotManifest manifest, string fallback)
+        {
+            if (manifest.SkillProtection != null
+                && !string.IsNullOrWhiteSpace(manifest.SkillProtection.OriginalRunSha256))
+            {
+                return manifest.SkillProtection.OriginalRunSha256;
+            }
+
+            return manifest.VendorStockRepair == null
+                ? fallback
+                : manifest.VendorStockRepair.OriginalRunSha256;
         }
 
         private static bool ManifestLengthMatches(

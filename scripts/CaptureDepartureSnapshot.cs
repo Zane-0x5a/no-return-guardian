@@ -16,12 +16,12 @@ internal static class CaptureDepartureSnapshot
         Console.OutputEncoding = new UTF8Encoding(false);
         int routeIndex;
         long observedMs;
-        if (args.Length != 7
+        if ((args.Length != 7 && args.Length != 8)
             || !int.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out routeIndex)
             || !long.TryParse(args[3], NumberStyles.None, CultureInfo.InvariantCulture, out observedMs))
         {
             Console.Error.WriteLine(
-                "Usage: CaptureDepartureSnapshot <storage-root> <profile-path> <route-index> <observed-unix-ms> <r0a-sha256> <staged-directory> <basis>");
+                "Usage: CaptureDepartureSnapshot <storage-root> <profile-path> <route-index> <observed-unix-ms> <r0a-sha256> <staged-directory> <basis> [skill-observation]");
             return 2;
         }
 
@@ -38,7 +38,8 @@ internal static class CaptureDepartureSnapshot
             ObservedUtc = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMilliseconds(observedMs),
             RunSha256 = args[4],
             StagedPath = args[5],
-            Basis = args[6]
+            Basis = args[6],
+            SkillObservationPath = args.Length == 8 ? args[7] : null
         });
         if (!result.Success)
         {

@@ -18,9 +18,10 @@ HERE = Path(__file__).resolve().parent
 # The native scripts a release ships for the product's modes (scripts\build-native-recovery.ps1).
 SHIPPED_PYTHON = ('NativeCheckpointTrigger.py', 'NativeCheckpointProbe.py', 'NativeRecoverySource.py',
                   'NativeResultsExit.py', 'NativeResultsUi.py', 'NativeEncounterRestart.py',
-                  'NativeDepartureRecorder.py', 'NativeDepartureStage.py', 'NativeDepartureRecord.py')
+                  'NativeDepartureRecorder.py', 'NativeDepartureStage.py', 'NativeDepartureRecord.py',
+                  'NativeSkillState.py')
 SHIPPED_JAVASCRIPT = ('NativeRecoveryBridge.js', 'NativeRecoveryContract.js', 'NativePreparationRecovery.js',
-                      'NativeResultsContinue.js', 'NativeEncounterControl.js')
+                      'NativeResultsContinue.js', 'NativeEncounterControl.js', 'NativeSkillState.js')
 # Experiment code that refuses every build but the verified one (require_verified_build).
 VERIFIED_ONLY = {('NativeCheckpointProbe.py', name) for name in ('inspect_registrations', 'verify_code', 'sample')}
 # Where code and game data lie in the verified build; smaller constants are sizes and field offsets.
@@ -54,7 +55,7 @@ class CodeSignatureTests(unittest.TestCase):
     def test_every_native_site_is_pinned(self):
         pinned = NativeCodeSignature.PINNED
         for group in (CODE_RVAS, LIFECYCLE_RVAS, RESUME_RVAS, LOAD_RVAS, COLLECTION_RVAS, RECOVERY_RVAS,
-                      RESULTS_RVAS, ENCOUNTER_RVAS, CONTROL_RVAS, CONTINUE_RVAS):
+                      RESULTS_RVAS, ENCOUNTER_RVAS, CONTROL_RVAS, CONTINUE_RVAS, NativeCodeSignature.SKILL_RVAS):
             for rva in group:
                 with self.subTest(rva=hex(rva)):
                     self.assertGreaterEqual(len(pinned[rva]) // 2, NativeCodeSignature.CODE_BYTES)

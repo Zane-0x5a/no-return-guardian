@@ -14,7 +14,7 @@ PACKAGED = ('NativeCheckpointTrigger.py', 'NativeRecoverySource.py', 'NativeReco
             'NativeCheckpointProbe.py', 'NativeRecoveryBridge.js', 'NativeRecoveryContract.js',
             'NativePreparationRecovery.js', 'NativeResultsContinue.js', 'NativeEncounterRestart.py',
             'NativeEncounterControl.js', 'NativeCodeSignature.py', 'NativeDepartureRecord.py',
-            'NativeDepartureStage.py', 'NativeDepartureRecorder.py')
+            'NativeDepartureStage.py', 'NativeDepartureRecorder.py', 'NativeSkillState.py', 'NativeSkillState.js')
 HELPERS = ('VerifySnapshot.exe', 'CaptureLiveSnapshot.exe', 'CaptureDepartureSnapshot.exe', 'UndoSnapshot.exe')
 
 

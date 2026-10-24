@@ -27,6 +27,8 @@ VERIFIED_SHA256 = 'CAC7F729EAE6FAB743616B8216ACF20E9F05D8E51DA0E3B7A4892147569DD
 UNVERIFIED_BUILD = 'Game code differs from the verified build'
 # Every code site of the native modes is pinned with the 32 bytes the scripts fingerprint.
 CODE_BYTES = 32
+# Read-only skill observation: player handle, persistent quantities, upgrade export, game-info and difficulty.
+SKILL_RVAS = (0xDA8DC0, 0xBC3470, 0xAB3CA0, 0xD2AD20, 0x1E41510, 0x126CFD0, 0x385CA0)
 # Return addresses the recovery bridge compares callers against, pinned around the call they follow,
 # and the profile stat service's vtable through slot 9, whose setter the bridge calls.
 EXTRA_SITES = ((0xFD7909 - 8, 16), (0x1B802C3 - 8, 16), (0x1B8152F - 8, 16), (0x1B82059 - 8, 16),
@@ -39,7 +41,8 @@ RETURN_ADDRESSES = BRIDGE_RETURNS + (0x133EC36,)
 # context, the broadcast target, the profile stat service and its vtable, and the results UI's manager, hash
 # table and page types. None of it is pinned: it is game state, not code.
 PRODUCT_DATA = (0x415AC90, 0x9334770, 0x9341660, 0x9342080, 0x9398730, 0x9398790, 0x4248B78, 0x2AF57D8,
-                0x92D08D8, 0x37D6928, 0x37D69B8, 0x9493978, 0x9493BA8, 0x9497E88)
+                0x92D08D8, 0x37D6928, 0x37D69B8, 0x9493978, 0x9493BA8, 0x9497E88,
+                0x411A770, 0x410EBD0, 0x4248B30)
 # With the Rogue and mode flags the experiments read.
 DATA_ADDRESSES = PRODUCT_DATA + (0x415AD30, 0x4161F58)
 VTABLES = ((0x2AF57D8, 0x50),)
@@ -53,7 +56,7 @@ def code_addresses():
     from NativeResultsExit import CONTINUE_RVAS
     return frozenset(rva for group in (CODE_RVAS, LIFECYCLE_RVAS, RESUME_RVAS, LOAD_RVAS, COLLECTION_RVAS,
                                        RECOVERY_RVAS, RESULTS_RVAS, ENCOUNTER_RVAS, CONTROL_RVAS, CONTINUE_RVAS,
-                                       RETURN_ADDRESSES) for rva in group)
+                                       RETURN_ADDRESSES, SKILL_RVAS) for rva in group)
 
 
 @cache
@@ -71,7 +74,7 @@ def product_addresses():
     from NativeEncounterRestart import CONTROL_RVAS
     from NativeResultsExit import CONTINUE_RVAS
     return frozenset(rva for group in (RECOVERY_RVAS, RESULTS_RVAS, ENCOUNTER_RVAS, CONTROL_RVAS, CONTINUE_RVAS,
-                                       BRIDGE_RETURNS, PRODUCT_DATA) for rva in group)
+                                       BRIDGE_RETURNS, PRODUCT_DATA, SKILL_RVAS) for rva in group)
 
 
 @dataclass(frozen=True)
@@ -110,10 +113,15 @@ class Build:
 # Generated from the verified build (see the module docstring).
 SECTIONS = {'.text': 0x1000, '.rdata': 0x2a86000, '.data': 0x3539000, '.pdata': 0x9652000, '_RDATA': 0x9841000, '.rsrc': 0x9855000, '.reloc': 0x99c6000}
 PINNED = {
+    0x385ca0: '4883ec28803dd052cf03007410488d0ddce3ce034883c428e973785c0033d233',
+    0xab3ca0: '4885d27422448b0933c04585c974184c8b5108448bc0496bc8384a391411740a',
+    0xbc3470: '488d4110c3cccccccccccccccccccccc488d4110c3cccccccccccccccccccccc',
+    0xd2ad20: '4056574883ec38488b05ea63b5024833c44889442428498bf8488bf24885d20f',
     0xd49530: '405356574881ec80000000488b05d67bb3024833c44889442470488bf1c5f9ef',
     0xd49630: '405356574881ec80000000488b05d67ab3024833c44889442470488bf1c5f9ef',
     0xd95530: '488bc448894808555356574154415541564157488d68a14881eca8000000c5f8',
     0xd966f0: '48895c2410574883ec30488bd9488d052401f60148890133d2e8c2f8d3ff33d2',
+    0xda8dc0: '4883ec38488b054d83ad024833c44889442428e838b3480084c07427b90e0000',
     0xdacc20: '488bc453565741544155415641574881ecf0040000c5f82970b8c5f82978a8c5',
     0xdaf950: '48895c24205556574154415541564157488d6c24d94881ecb0000000488b05a5',
     0xdafea0: '48895c240848896c24104889742418574883ec40498bf1498bf8488bea488bd9',
@@ -147,6 +155,7 @@ PINNED = {
     0x120dac0: '488b02488b400848051b0400004883e0f8c3cccccccccccccccccccccccccccc',
     0x1247360: '40534883ec20488bc2488bd94885d27423803a00741e48ba25232284e49cf2cb',
     0x124c1d0: '0fb60184c0741f49b8b3010000000100000fb6c0488d49014833d00fb601490f',
+    0x126cfd0: '8bc1488d0d57bbfd02488b04c1c3cccc448bc9488d0d46bbfd024a8b04c94885',
     0x133d910: '488b81800000004885c0740e488b40304885c07405488b4008c333c0c3cccccc',
     0x133d950: '488b81800000004885c0740e488b40384885c07405488b4008c333c0c3cccccc',
     0x133ebb0: '40534883ec20488bd9e872d02200c5f057c9c5f82fc1770a807b09000f8c9e00',
@@ -177,13 +186,13 @@ PINNED = {
     0x1e39660: '33c04885c97425448b0d3aa56507488b5140458bc149c1e9064183e03fc422bb',
     0x1e39880: '4883ec28e8f75a0100488bc8e8cfc4ffff4885c0741ef680a108000001741748',
     0x1e3b920: '48895c242055565741544155415641574883ec60488b05dd57a4014833c44889',
+    0x1e41510: '48895c2418565741564883ec20488bfa4c8bf1488bcfba02000000e8705941ff',
     0x1e4df10: '48895c24184889742420574881ec50040000488b05ef31a3014833c448898424',
     0x1e4f190: '4883ec28e877e74eff4885c07427448b05e38c6407488b4840418bd048c1ea06',
     0x1e4f380: '40534883ec20e805feffff488bd84885c07420488bc8e8d50000004885c07410',
     0x1e4f470: '4883ec28e8d7e44eff4885c07427448b05038a6407488b4840418bd048c1ea06',
     0x2af57d8: '70a9334001000000e0aa33400100000060ab33400100000080ab334001000000b07bc541010000005079c54101000000c066c54101000000b065c541010000005051c541010000004072c54101000000',
 }
-
 
 VERIFIED = Build('verified', SECTIONS, PINNED)
 # Steam build 19297819, game version v1.6.10721 (June 2026). Relocated from the verified build by
@@ -192,6 +201,14 @@ V1_6_10721 = Build(
     'v1.6.10721',
     {'.text': 0x1000, '.rdata': 0x2a8c000, '.data': 0x3541000, '.pdata': 0x965a000, '_RDATA': 0x984a000, '.rsrc': 0x985e000, '.reloc': 0x99cf000},
     {
+        # Read-only Ellie skill-state sites relocated from the verified build.
+        0x388ae0: '4883ec28803dd0a4cf03007410488d0ddc35cf034883c428e9537a5c0033d233',
+        0xab6cc0: '4885d27422448b0933c04585c974184c8b5108448bc0496bc8384a391411740a',
+        0xbc64d0: '488d4110c3cccccccccccccccccccccc488d4110c3cccccccccccccccccccccc',
+        0xd2de00: '4056574883ec38488b052ab4b5024833c44889442428498bf8488bf24885d20f',
+        0xdabea0: '4883ec38488b058dd3ad024833c44889442428e808bc480084c07427b90e0000',
+        0x1270a80: '8bc1488d0d2701fe02488b04c1c3cccc448bc9488d0d1601fe024a8b04c94885',
+        0x1e47410: '48895c2418565741564883ec20488bfa4c8bf1488bcfba02000000e8203541ff',
         0xd4c610: '405356574881ec80000000488b0516ccb3024833c44889442470488bf1c5f9ef',
         0xd4c710: '405356574881ec80000000488b0516cbb3024833c44889442470488bf1c5f9ef',
         0xd98610: '488bc448894808555356574154415541564157488d68a14881eca8000000c5f8',
@@ -327,12 +344,22 @@ V1_6_10721 = Build(
         0x1e4f380: 0x1e546d0,
         0x1e4f470: 0x1e547c0,
         0x2af57d8: 0x2afb818,
+        0x385ca0: 0x388ae0,
+        0xab3ca0: 0xab6cc0,
+        0xbc3470: 0xbc64d0,
+        0xd2ad20: 0xd2de00,
+        0xda8dc0: 0xdabea0,
+        0x126cfd0: 0x1270a80,
+        0x1e41510: 0x1e47410,
+        0x410ebd0: 0x4116c10,
+        0x411a770: 0x41227b0,
         0x37d6928: 0x37de998,
         0x37d69b8: 0x37dea28,
         0x415ac90: 0x4162cd0,
         0x415ad30: 0x4162d70,
         0x4161f58: 0x4169f98,
         0x4248b78: 0x4250bf8,
+        0x4248b30: 0x4250bb0,
         0x92d08d8: 0x92d89b8,
         0x9334770: 0x933c850,
         0x9341660: 0x934bfa0,
@@ -398,7 +425,7 @@ def main(argv):
         raise SystemExit('Generate the table from the verified build only')
     preferred, headers, sections = read_layout(image)
     sites = {rva: CODE_BYTES for group in (CODE_RVAS, LIFECYCLE_RVAS, RESUME_RVAS, LOAD_RVAS, COLLECTION_RVAS,
-                                           RECOVERY_RVAS, RESULTS_RVAS, ENCOUNTER_RVAS) for rva in group}
+                                           RECOVERY_RVAS, RESULTS_RVAS, ENCOUNTER_RVAS, SKILL_RVAS) for rva in group}
     sites.update(EXTRA_SITES)
     print('SECTIONS = {' + ', '.join(f'{section.name!r}: {section.virtual_address:#x}' for section in sections) + '}')
     print('PINNED = {')

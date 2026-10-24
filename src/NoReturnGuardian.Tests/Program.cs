@@ -1057,7 +1057,7 @@ namespace NoReturnGuardian.Tests
                     });
 
                 Assert.False(capture.Success, "an unknown R0A header was hot-synthesized");
-                Assert.Equal("run_slot_synthesis_unsupported", capture.Code);
+                Assert.Equal("skill_state_unreadable", capture.Code);
                 Assert.Equal(0, store.ListSnapshots().Count);
             }
         }
@@ -3107,7 +3107,7 @@ namespace NoReturnGuardian.Tests
             byte[] inconsistent = (byte[])stocked.Clone();
             Buffer.BlockCopy(BitConverter.GetBytes(2L), 0, inconsistent, witnessRead.Value.CountOffset, 8);
             Assert.Equal("vendor_stock_unreadable", VendorStock.Read(inconsistent).Code);
-            Assert.Equal("vendor_stock_unreadable", VendorStock.Read(baseRaw).Code);
+            Assert.Equal(0, VendorStock.Read(baseRaw).Value.Count);
         }
 
         private static void TestVendorStockManualRepair()
@@ -3603,7 +3603,7 @@ namespace NoReturnGuardian.Tests
         {
             byte[] raw = Pattern(8192 + seed * 16, seed, 17);
             EmbedWorkingState(raw, seed, false);
-            return raw;
+            return WithVendorStock(raw, "seed-" + seed, 0);
         }
 
         /// <summary>
@@ -3650,13 +3650,14 @@ namespace NoReturnGuardian.Tests
             put(8, (ulong)rootSlot);
             int rootValues = alloc(8);
             int rootKinds = alloc(1);
+            put(0x10, (ulong)rootKinds);
             int rootKeys = alloc(8);
             put(rootSlot, (ulong)node(1, rootValues, rootKinds, rootKeys));
             arena[rootKinds] = 6;
             put(rootKeys, 0x92AD3946449C662D);
 
-            ulong[] keys = { 0x7A42A069A2B91748, 0x6E133B0E37FD8006, 0x0B55C175A3A096A0, 0xA3CFA1D0C8AA075A, 0xC0447FC28ACA3578 };
-            byte[] kinds = { 1, 5, 4, 1, 4 };
+            ulong[] keys = { 0x7A42A069A2B91748, 0x6E133B0E37FD8006, 0x0B55C175A3A096A0, 0xA3CFA1D0C8AA075A, 0xC0447FC28ACA3578, 0xBF552FA83AED497F };
+            byte[] kinds = { 1, 5, 4, 1, 4, 1 };
             int runValues = alloc(keys.Length * 8);
             int runKinds = alloc(keys.Length);
             int runKeys = alloc(keys.Length * 8);
@@ -3680,6 +3681,7 @@ namespace NoReturnGuardian.Tests
             put(runValues + 16, (ulong)text(runId ?? VendorRunId));
             put(runValues + 24, (ulong)completed);
             put(runValues + 32, (ulong)text(seed));
+            put(runValues + 40, 1); // A modeled non-Ellie run; it never needs a live skill observation.
             int length = (cursor + 7) & ~7;
             Buffer.BlockCopy(BitConverter.GetBytes(length), 0, arena, 0x38, 4);
 
@@ -4065,6 +4067,7 @@ namespace NoReturnGuardian.Tests
             int rawLength = 8192 + seed * 16;
             byte[] rawRun = Pattern(rawLength, seed, 17);
             EmbedWorkingState(rawRun, seed, encounter);
+            rawRun = WithVendorStock(rawRun, "seed-" + seed, 0);
             byte[] profileData = Pattern(2048 + seed, (byte)(seed + 3), 11);
             string profileDetail = "\n[0F0000000000000000000000]";
             EmbedSlotDetail(profileData, profileDetail);

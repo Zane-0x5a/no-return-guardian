@@ -211,7 +211,9 @@ namespace NoReturnGuardian
         {
             _snapshotStore = new SnapshotStore(_settings.StoragePath, new SystemClock())
             {
-                AutomaticRetention = _settings.AutomaticRetention
+                AutomaticRetention = _settings.AutomaticRetention,
+                SkillObservationReader = (profile, raw, boundary) =>
+                    NativeRecovery.ReadSkillObservation(profile, raw, boundary)
             };
             _warmRestore = new WarmRestoreController(_snapshotStore, new SystemClock());
             _monitor = new GuardianMonitor(_snapshotStore, _gameProbe, new SystemClock())

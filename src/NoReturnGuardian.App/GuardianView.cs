@@ -98,7 +98,7 @@ namespace NoReturnGuardian
                 string restore = null;
                 if (ready && !blockedRestore)
                 {
-                    if (native && record.Manifest.SchemaVersion == 5)
+                    if (native && record.Manifest.SchemaVersion >= 5 && record.Manifest.SchemaVersion <= 7)
                     {
                         restore = "native";
                     }
@@ -117,7 +117,7 @@ namespace NoReturnGuardian
                     "state", StateOf(record),
                     "restore", restore,
                     // 重开战斗只在游戏运行时有意义：从结算页、菜单、战斗中或刚恢复出的兵营出发。
-                    "restart", departure && native && !blockedRestore && record.Manifest.SchemaVersion == 5,
+                    "restart", departure && native && !blockedRestore && record.Manifest.SchemaVersion >= 5 && record.Manifest.SchemaVersion <= 7,
                     "departure", departure,
                     "preRestore", string.Equals(record.Manifest.Kind, SnapshotKinds.PreRestore, StringComparison.OrdinalIgnoreCase));
             }).ToList();
@@ -370,6 +370,17 @@ namespace NoReturnGuardian
                 case "snapshot_manifest_hash_mismatch":
                 case "snapshot_invalid": return "这份快照没有通过校验，不能恢复";
                 case "snapshot_unconfirmed": return "这份快照不能恢复";
+                case "skill_state_incomplete": return "这份战备缺少艾莉的额外技能树，无法完整恢复";
+                case "skill_state_unreadable":
+                case "skill_observation_unavailable":
+                case "skill_observation_mismatch":
+                case "skill_state_conflict":
+                case "skill_inventory_full":
+                case "skill_completion_failed": return "无法确认技能树完整，本次战备未保存；请留在兵营后重试";
+                case "snapshot_skill_state_mismatch":
+                case "snapshot_skill_state_hash_mismatch":
+                case "snapshot_skill_evidence_missing":
+                case "snapshot_skill_evidence_hash_mismatch": return "这份战备的技能树没有通过校验，不能恢复";
                 case "snapshot_profile_mismatch": return "这份快照属于另一个存档账号";
                 case "game_running": return "游戏还在运行，请先完整退出游戏";
                 case "restore_written_verified": return "战备已写回";

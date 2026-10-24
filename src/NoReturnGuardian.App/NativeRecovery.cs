@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
+using NoReturnGuardian.Core;
 
 namespace NoReturnGuardian
 {
@@ -227,6 +228,82 @@ namespace NoReturnGuardian
             arguments.Add(entry == RecoveryEntry.Menu ? "menu" : entry == RecoveryEntry.Results ? "results"
                 : entry == RecoveryEntry.MidEncounter ? "mid-encounter" : "auto");
             return arguments.ToArray();
+        }
+
+        /// <summary>Read the live skill state through the bounded diagnostic helper; no Frida hook or game write.</summary>
+        public static Result<SkillObservation> ReadSkillObservation(string profile, string rawPath, string boundary)
+        {
+            GameTarget game;
+            try
+            {
+                game = FindGame();
+            }
+            catch (Exception error)
+            {
+                return Result<SkillObservation>.Fail("skill_observation_unavailable", error.Message);
+            }
+
+            var arguments = new List<string>
+            {
+                "-X", "utf8",
+                Path.Combine(RuntimeRoot, "scripts", "diagnostics", "NativeSkillState.py"),
+                game.Pid.ToString(), "--profile", Path.GetFullPath(profile), "--raw", Path.GetFullPath(rawPath)
+            };
+            if (boundary != "manual")
+                return Result<SkillObservation>.Fail("skill_observation_unavailable", "Departures require their event observation.");
+
+            try
+            {
+                var start = new ProcessStartInfo(Python(), string.Join(" ", arguments.Select(Quote)))
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WorkingDirectory = RuntimeRoot,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8
+                };
+                using (var process = Process.Start(start))
+                {
+                    var stdoutRead = process.StandardOutput.ReadToEndAsync();
+                    var stderrRead = process.StandardError.ReadToEndAsync();
+                    if (!process.WaitForExit(10000))
+                    {
+                        process.Kill();
+                        return Result<SkillObservation>.Fail("skill_observation_unavailable", "The skill observation timed out.");
+                    }
+                    string stdout = stdoutRead.GetAwaiter().GetResult();
+                    string stderr = stderrRead.GetAwaiter().GetResult();
+                    if (process.ExitCode != 0)
+                    {
+                        return Result<SkillObservation>.Fail(
+                            "skill_observation_unavailable",
+                            "The live skill state could not be read." + (string.IsNullOrWhiteSpace(stderr) ? "" : " " + stderr.Trim()));
+                    }
+
+                    SkillObservation observation = new JavaScriptSerializer().Deserialize<SkillObservation>(stdout);
+                    if (observation == null)
+                    {
+                        return Result<SkillObservation>.Fail(
+                            "skill_observation_unavailable",
+                            "The live skill state result was empty.");
+                    }
+
+                    observation.Boundary = boundary;
+                    return Result<SkillObservation>.Ok(
+                        observation,
+                        "skill_observation_read",
+                        "The live skill state was read.");
+                }
+            }
+            catch (Exception error) when (error is IOException || error is InvalidOperationException
+                || error is UnauthorizedAccessException || error is ArgumentException)
+            {
+                return Result<SkillObservation>.Fail(
+                    "skill_observation_unavailable",
+                    "The live skill state could not be read.");
+            }
         }
 
         private static string Quote(string value)

@@ -22,6 +22,12 @@ $diagnostics = Join-Path $PSScriptRoot 'diagnostics'
 # 开发树里的恢复脚本从 tools\ 调用辅助程序、导入 frida；先让它们和当前源码一致。
 Build-NativeHelpers $script:DevelopmentTools
 Initialize-DevelopmentFrida | Out-Null
+New-Item -ItemType Directory -Path $script:BuildCache -Force | Out-Null
+$skillFixture = Join-Path $script:BuildCache 'TestSkillCapture.exe'
+& (Find-Roslyn) /nologo /target:exe "/out:$skillFixture" /reference:System.Web.Extensions.dll /reference:System.Core.dll `
+    (Join-Path $diagnostics 'TestSkillCapture.cs') `
+    @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'src\NoReturnGuardian.Core') -Filter '*.cs' | ForEach-Object FullName)
+if ($LASTEXITCODE -ne 0) { throw 'The skill-state fixture did not compile.' }
 
 $skips = [ordered]@{}
 function Add-Skip([string]$Reason, [int]$Count) {

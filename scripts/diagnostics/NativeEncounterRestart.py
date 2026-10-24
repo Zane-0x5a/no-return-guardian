@@ -14,7 +14,7 @@ import sys
 import time
 
 from NativeCheckpointProbe import FRIDA_DEPS, ProbeError, inspect_current_task, verify_build
-from NativeCodeSignature import addresses, at
+from NativeCodeSignature import addresses, at, SKILL_RVAS
 
 
 CONTROL_RVAS = (0x133EC5E, 0x1B843A0, 0x1B83F70, 0x1B6E000, 0xDC1780, 0x1B6EA60, 0xFE7B10, 0x1200AC0)
@@ -56,7 +56,8 @@ def task_identity(process, task):
 def run_control(session, configuration, record, timeout, cancel=None):
     """Run one encounter-control script on an attached session; its failures never become recovery failures."""
     messages = queue.Queue()
-    source = Path(__file__).with_name('NativeEncounterControl.js').read_text(encoding='utf-8')
+    source = (Path(__file__).with_name('NativeSkillState.js').read_text(encoding='utf-8') + '\n' +
+              Path(__file__).with_name('NativeEncounterControl.js').read_text(encoding='utf-8'))
     script = session.create_script('globalThis.nativeEncounterConfiguration = ' +
                                    json.dumps(configuration) + ';\n' + source)
     script.on('message', lambda message, data: messages.put(message))
@@ -108,6 +109,11 @@ def control_configuration(mode, pid, base, fingerprints, duration, **fields):
     hooks = [item for item in fingerprints if item['rva'] in CONTROL_RVAS]
     if sorted(item['rva'] for item in hooks) != sorted(CONTROL_RVAS):
         raise ProbeError('Encounter control fingerprints are incomplete')
+    if mode == 'record':
+        skill = [item for item in fingerprints if item['rva'] in SKILL_RVAS]
+        if sorted(item['rva'] for item in skill) != sorted(SKILL_RVAS):
+            raise ProbeError('Skill observation fingerprints are incomplete')
+        hooks += skill
     return {'mode': mode, 'pid': pid, 'base': hex(base), 'duration': duration, 'fingerprints': hooks,
             'addresses': addresses(), **fields}
 

@@ -338,10 +338,14 @@ def clear_stale_stages(root, age=3600):
         pass
 
 
-def protect_departure(storage, profile, index, observed_ms, digest, staged, basis=PRE_DEPARTURE_SAVE):
+def protect_departure(storage, profile, index, observed_ms, digest, staged, basis=PRE_DEPARTURE_SAVE,
+                      observation_path=None):
     """Publish the frozen hideout save through Guardian's own hot-capture gates."""
-    result = subprocess.run([str(TOOLS / 'CaptureDepartureSnapshot.exe'), str(storage), str(profile),
-                             str(index), str(int(observed_ms)), digest, str(staged), basis],
+    command = [str(TOOLS / 'CaptureDepartureSnapshot.exe'), str(storage), str(profile),
+               str(index), str(int(observed_ms)), digest, str(staged), basis]
+    if observation_path:
+        command.append(str(observation_path))
+    result = subprocess.run(command,
                             capture_output=True, timeout=30, check=False)
     if result.returncode != 0:
         raise ProbeError('departure capture rejected: ' +

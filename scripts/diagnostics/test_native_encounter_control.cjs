@@ -10,6 +10,7 @@ const identityAddresses = new Proxy({}, { get: (_, key) => /^0x[0-9a-f]+$/.test(
 const source = fs.readFileSync(path.join(__dirname, 'NativeEncounterControl.js'), 'utf8');
 const base = 0x140000000;
 const required = [0x133ec5e, 0x1b843a0, 0x1b83f70, 0x1b6e000, 0xdc1780, 0x1b6ea60, 0xfe7b10, 0x1200ac0];
+const skillRequired = [0xda8dc0, 0xbc3470, 0xab3ca0, 0xd2ad20, 0x1e41510, 0x126cfd0, 0x385ca0];
 const nextTask = 0xa9456e5567d0ce70n;
 const abandoned = 0xdd669d5bfffeaf6cn;
 const owner = 0x7000;
@@ -119,6 +120,7 @@ function fixture(mode, extra = {}) {
         Date: { now: () => clock.now }
     };
     const clock = { now: 1000 };
+    if (extra.skillReader) context.readSkillObservation = extra.skillReader;
     vm.runInNewContext(source, context);
     function update(rbx = owner) {
         const callback = hooks.get(0x133ec5e);
@@ -154,6 +156,24 @@ test('record captures only the departure event slots and detaches itself', () =>
     assert.deepEqual(probe.detached, [0x1b83f70]);
     assert.equal(probe.messages.at(-1).reason, 'captured');
     assert.equal(probe.messages.at(-1).seen, 2);
+});
+
+test('the departure probe reads skills twice before publishing the broadcast', () => {
+    let reads = 0;
+    const probe = fixture('record', {
+        fingerprints: required.concat(skillRequired).map(rva => ({ rva, bytes: '00'.repeat(32) })),
+        skillReader: () => { reads++; return { Task: '0x8000', TaskWord: 2, Manuals: ['original-bonus'] }; }
+    });
+    const event = 0x50000;
+    const stack = 0x58000;
+    probe.memory.put(event, nextTask, 8);
+    probe.memory.put(event + 0x128, 2, 2);
+    probe.memory.pointer(event + 0x28).writeByteArray(Buffer.from(board, 'hex'));
+    probe.hooks.get(0x1b83f70).call({ threadId: 5, context: { rsp: probe.memory.pointer(stack) } },
+        [null, null, probe.memory.pointer(event)]);
+    assert.equal(reads, 2);
+    assert.equal(probe.messages.find(message => message.kind === 'departure-captured').skillObservation.Task, '0x8000');
+    assert.equal(probe.broadcasts.length, 0);
 });
 
 test('redeploy waits for a settled hideout, replays the recorded slot once and confirms arrival', () => {

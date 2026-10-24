@@ -105,8 +105,8 @@ def prepare_payload(raw, verified, profile, snapshot_id, profile_raw, redeploy=F
                          if use == 'restart' else
                          'The formal verifier does not allow this preparation for ' +
                          ('restarting its encounter' if redeploy else 'returning to its hideout'))
-    if (verified.get('id') != snapshot_id or verified.get('schema') != 5 or
-            verified.get('captureBasis') != 'hot_synthesized_state' or
+    if (verified.get('id') != snapshot_id or verified.get('schema') not in (5, 6, 7) or
+            verified.get('captureBasis') not in ('hot_synthesized_state', 'native_exported_state') or
             Path(verified.get('sourceProfilePath') or '').resolve() != profile.resolve()):
         raise ProbeError('Native source is not a confirmed preparation for the selected profile')
     digest = hashlib.sha256(raw).hexdigest()

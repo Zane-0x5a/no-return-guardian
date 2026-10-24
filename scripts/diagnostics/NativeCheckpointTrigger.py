@@ -14,7 +14,7 @@ import time
 from types import SimpleNamespace
 
 from NativeCheckpointProbe import FRIDA_DEPS, ReadOnlyProcess, ProbeError, require_verified_build, verify_build
-from NativeCodeSignature import addresses, at
+from NativeCodeSignature import SKILL_RVAS, addresses, at
 from InspectPeVa import read_layout, va_to_offset
 
 
@@ -113,7 +113,7 @@ def fingerprints(image, mode='observe'):
     if mode == 'results-exit':
         selected = RESULTS_RVAS
     if mode == 'encounter-control':
-        selected = ENCOUNTER_RVAS
+        selected = tuple(ENCOUNTER_RVAS) + tuple(SKILL_RVAS)
     for rva in selected:
         offset, section = va_to_offset(base + at(rva), base, headers, sections)
         if section != '.text':

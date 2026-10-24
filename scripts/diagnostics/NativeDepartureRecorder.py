@@ -10,6 +10,7 @@ to the log with its reason.
 """
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -22,7 +23,7 @@ import traceback
 from NativeCheckpointProbe import FRIDA_DEPS, ProbeError, ReadOnlyProcess, verify_build
 from NativeCheckpointTrigger import fingerprints, process_birth, verify_live
 from NativeDepartureRecord import departure_path, departure_slots, new_departure, write_departure
-from NativeDepartureStage import HideoutStage, protect_departure
+from NativeDepartureStage import HideoutStage, protect_departure, exported_raw
 from NativeEncounterRestart import (arm_decision, code_restored, control_configuration, hideout_state,
                                     run_control, save_workers, task_identity)
 
@@ -148,7 +149,7 @@ class HideoutWatch:
         return self.reason is not None
 
 
-def protect(args, stage, captured, index, owner, stopping, record):
+def protect(args, stage, captured, index, owner, stopping, record, birth=None, digest=None):
     """Publish the hideout save frozen before the departure as the preparation that owns the record.
 
     Returns the record's owner and the new snapshot (None when nothing was published). Without a fallback
@@ -161,8 +162,13 @@ def protect(args, stage, captured, index, owner, stopping, record):
         frozen = stage.bind(captured['time'], captured.get('workers'), stopping.is_set)
         record({'kind': 'departure-save-bound', 'runSha256': frozen['sha256'], 'basis': frozen['basis'],
                 'savedAtMs': frozen['savedAtNs'] // 1_000_000, 'eventMs': captured['time']})
-        receipt = protect_departure(args.storage, args.profile, index, captured['time'], frozen['sha256'],
-                                    frozen['path'], frozen['basis'])
+        observation_path = observe_skill_state(args, frozen['path'], captured, birth, digest, record)
+        if observation_path is None:
+            receipt = protect_departure(args.storage, args.profile, index, captured['time'], frozen['sha256'],
+                                        frozen['path'], frozen['basis'])
+        else:
+            receipt = protect_departure(args.storage, args.profile, index, captured['time'], frozen['sha256'],
+                                        frozen['path'], frozen['basis'], observation_path)
         record({'kind': 'departure-protected', 'snapshotId': receipt['id'], 'receipt': receipt})
         return receipt['id'], receipt['id']
     except (ProbeError, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
@@ -170,6 +176,37 @@ def protect(args, stage, captured, index, owner, stopping, record):
         if owner is None or stopping.is_set():
             raise Stopped('guardian-stopped' if stopping.is_set() else f'departure-not-protected: {error}')
         return owner, None
+
+
+def observe_skill_state(args, staged, captured, birth, digest, record):
+    """Persist the bounded observation made by the broadcast probe beside the frozen save."""
+    output = Path(staged) / 'skill-observation.json'
+    try:
+        observation = captured.get('skillObservation')
+        if not isinstance(observation, dict):
+            record({'kind': 'skill-observation-skipped', 'reason': 'event probe supplied no skill observation'})
+            return None
+        raw = Path(staged) / 'gamedata' / 'R0A.save'
+        observation['ProfilePath'] = str(Path(args.profile).resolve())
+        observation['ProcessId'] = int(args.pid)
+        if birth is not None:
+            observation['ProcessBirth'] = str(birth)
+        if digest is not None:
+            observation['BuildSha256'] = digest
+        observation['ObservedUtc'] = datetime.fromtimestamp(
+            float(captured['time']) / 1000.0, timezone.utc).isoformat()
+        observation['Boundary'] = 'departure'
+        observation['DepartureObservedMs'] = int(captured['time'])
+        source = raw.read_bytes() if raw.is_file() else exported_raw(
+            (Path(staged) / 'savedata' / 'SAVEFILER0A' / 'USR-DATA').read_bytes())
+        observation['OriginalRunSha256'] = hashlib.sha256(source).hexdigest()
+        output.write_text(json.dumps(observation, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
+        record({'kind': 'skill-observation-captured', 'path': str(output),
+                'runSha256': observation.get('OriginalRunSha256')})
+        return str(output)
+    except (OSError, ValueError, KeyError, ProbeError, subprocess.SubprocessError) as error:
+        record({'kind': 'skill-observation-skipped', 'reason': str(error)})
+        return None
 
 
 def await_arrival(process, base, birth, stopping):
@@ -238,7 +275,7 @@ def record_departure(argv=None):
                 raise Stopped(watch.reason or 'no-departure-captured')
             raw, index = departure_slots(captured.get('slots'), captured.get('count'))
             try:
-                owner, protected = protect(args, stage, captured, index, owner, stopping, record)
+                owner, protected = protect(args, stage, captured, index, owner, stopping, record, birth, digest)
             except Stopped as stop:
                 if not stop.reason.startswith('departure-not-protected'):
                     raise

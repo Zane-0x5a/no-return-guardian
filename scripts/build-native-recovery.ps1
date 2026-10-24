@@ -68,7 +68,7 @@ foreach ($source in @('NativeCheckpointTrigger.py', 'NativeCheckpointProbe.py', 
     'NativeSerializedArena.py', 'NativeSaveBuffer.py',
     'NativeRecoveryContract.js', 'NativeRecoveryBridge.js', 'NativePreparationRecovery.js',
     'NativeResultsContinue.js', 'NativeEncounterRestart.py', 'NativeEncounterControl.js', 'NativeCodeSignature.py',
-    'NativeDepartureRecord.py', 'NativeDepartureStage.py', 'NativeDepartureRecorder.py')) {
+    'NativeDepartureRecord.py', 'NativeDepartureStage.py', 'NativeDepartureRecorder.py', 'NativeSkillState.py', 'NativeSkillState.js')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "diagnostics\$source") -Destination (Join-Path $scriptStage 'diagnostics') -Force
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'InspectPeVa.py') -Destination $scriptStage -Force

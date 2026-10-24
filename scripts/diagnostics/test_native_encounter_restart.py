@@ -29,7 +29,8 @@ SLOT = '05000000000000000000000002000000'
 # Real 2026-10-01 route-board departures (wait-for-input state): int32 route index, then the photo's boolean.
 BOARD = '0300000000000000820000000200000000000000000000002400000001000000'
 BOARD_FIRST = '0000000000000000000000000200000000000000000000000000000001000000'
-CODE = [{'rva': rva, 'bytes': f'{index:02x}' * 32} for index, rva in enumerate(CONTROL_RVAS, 1)]
+CODE = [{'rva': rva, 'bytes': f'{index:02x}' * 32}
+        for index, rva in enumerate(CONTROL_RVAS + tuple(NativeCodeSignature.SKILL_RVAS), 1)]
 OBSERVED_MS = 1790836977984
 BOUND = 'ab' * 32
 

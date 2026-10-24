@@ -73,7 +73,7 @@ namespace NoReturnGuardian
                 return "这份战备已经不在了。";
             if (!string.Equals(target.Manifest.SourceProfilePath, settings.ProfilePath, StringComparison.OrdinalIgnoreCase))
                 return "这份战备属于另一个存档账号。";
-            if (target.Manifest.SchemaVersion != 5)
+            if (target.Manifest.SchemaVersion < 5 || target.Manifest.SchemaVersion > 7)
                 return "这份战备只能在完整退出游戏后恢复。";
 
             bool redeploy = restart && NativeRecovery.HasDeparture(settings.StoragePath, target.Manifest.Id);
@@ -186,7 +186,7 @@ namespace NoReturnGuardian
             SnapshotRecord latest = _host.Store.ListSnapshots().FirstOrDefault(record =>
                 record != null
                 && record.Manifest != null
-                && record.Manifest.SchemaVersion == 5
+                && record.Manifest.SchemaVersion >= 5 && record.Manifest.SchemaVersion <= 7
                 && string.Equals(record.Manifest.SourceProfilePath, settings.ProfilePath, StringComparison.OrdinalIgnoreCase)
                 && SnapshotPolicy.IsRedeployablePreparation(record));
             SnapshotRecord target = restart ? Find(_recorder.RebuiltHideoutSnapshot()) ?? latest : latest;

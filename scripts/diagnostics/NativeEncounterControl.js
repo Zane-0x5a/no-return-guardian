@@ -10,6 +10,7 @@ const options = { abi: 'win64', exceptions: 'propagate', scheduling: 'exclusive'
 const nextTask = uint64('0xa9456e5567d0ce70');
 const abandoned = uint64('0xdd669d5bfffeaf6c');
 const required = [0x133ec5e, 0x1b843a0, 0x1b83f70, 0x1b6e000, 0xdc1780, 0x1b6ea60, 0xfe7b10, 0x1200ac0];
+const skillRequired = [0xda8dc0, 0xbc3470, 0xab3ca0, 0xd2ad20, 0x1e41510, 0x126cfd0, 0x385ca0];
 const listeners = [];
 const empty = Memory.alloc(16);
 let departure = null;
@@ -91,9 +92,17 @@ function record(args) {
     // The save workers at this instant tell the host whether a hideout save was still being written
     // when the player departed; the departure save itself starts only after the respite handles this event.
     const observed = state();
+    let skillObservation = null;
+    if (globalThis.skillObservationEnabled) {
+        if (!playable(observed)) throw new Error('Departure is outside a settled playable hideout');
+        const first = readSkillObservation();
+        const second = readSkillObservation();
+        if (JSON.stringify(first) !== JSON.stringify(second)) throw new Error('Skill state changed during departure event');
+        skillObservation = first;
+    }
     publish('departure-captured', { count, slots: hex(event.add(0x28).readByteArray(count * 16)),
         threadId: this.threadId, caller: this.context.rsp.readPointer().sub(image.base).toString(16),
-        workers: observed.workers, runActive: observed.runActive });
+        workers: observed.workers, runActive: observed.runActive, skillObservation });
     stop('captured');
 }
 
@@ -150,7 +159,9 @@ function install() {
     if (!['record', 'redeploy', 'abandon'].includes(configuration.mode) || Process.arch !== 'x64' ||
         Process.id !== configuration.pid || image.name.toLowerCase() !== 'tlou-ii.exe' ||
         !image.base.equals(ptr(configuration.base))) throw new Error('Process identity mismatch');
-    for (const rva of required) {
+    const hasSkillFingerprints = skillRequired.every(rva =>
+        configuration.fingerprints.some(item => item.rva === rva));
+    for (const rva of required.concat(hasSkillFingerprints ? skillRequired : [])) {
         const fingerprint = configuration.fingerprints.find(item => item.rva === rva);
         if (!fingerprint || fingerprint.bytes.length !== 64 ||
             hex(at(rva).readByteArray(32)) !== fingerprint.bytes) {
@@ -158,6 +169,7 @@ function install() {
         }
     }
     if (configuration.mode === 'record') {
+        if (hasSkillFingerprints) globalThis.skillObservationEnabled = true;
         listeners.push(Interceptor.attach(at(0x1b83f70), function(args) {
             guard(() => record.call(this, args));
         }));

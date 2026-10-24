@@ -378,6 +378,47 @@ namespace NoReturnGuardian.Core
                     ",",
                     manifest.VendorStockRepair.Items ?? new List<string>()));
             }
+            if (manifest.SchemaVersion >= 7 && manifest.SkillProtection != null)
+            {
+                SkillProtection protection = manifest.SkillProtection;
+                AppendCanonical(builder, "skillOriginalRun", protection.OriginalRunSha256);
+                AppendCanonical(builder, "skillCompletedRun", protection.CompletedRunSha256);
+                AppendCanonical(builder, "skillEvidence", protection.EvidenceSha256);
+                AppendCanonical(builder, "skillNativeExport", protection.NativeExportSha256);
+                AppendCanonical(builder, "skillNativeFooter", protection.NativeExportFooter);
+                SkillObservation observation = protection.Observation;
+                AppendCanonical(builder, "skillObservation", observation == null ? null : observation.Version.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture));
+                if (observation != null)
+                {
+                    AppendCanonical(builder, "skillProfile", observation.ProfilePath);
+                    AppendCanonical(builder, "skillPid", observation.ProcessId.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture));
+                    AppendCanonical(builder, "skillBirth", observation.ProcessBirth);
+                    AppendCanonical(builder, "skillBuild", observation.BuildSha256);
+                    AppendCanonical(builder, "skillObserved", observation.ObservedUtc);
+                    AppendCanonical(builder, "skillBoundary", observation.Boundary);
+                    AppendCanonical(builder, "skillDepartureMs", observation.DepartureObservedMs.HasValue
+                        ? observation.DepartureObservedMs.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                        : string.Empty);
+                    AppendCanonical(builder, "skillRun", observation.OriginalRunSha256);
+                    AppendCanonical(builder, "skillRunId", observation.RunId);
+                    AppendCanonical(builder, "skillCharacter", observation.CharacterIndex.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture));
+                    AppendCanonical(builder, "skillCompleted", observation.CompletedEncounters.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture));
+                    AppendCanonical(builder, "skillSeed", observation.Seed);
+                    AppendCanonical(builder, "skillDifficulty", observation.Difficulty.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture));
+                    AppendCanonical(builder, "skillTask", observation.Task);
+                    AppendCanonical(builder, "skillTaskWord", observation.TaskWord.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture));
+                    AppendCanonical(builder, "skillSupplements", observation.Supplements.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture));
+                    AppendCanonical(builder, "skillUpgrades", observation.Upgrades);
+                    AppendCanonical(builder, "skillManuals", string.Join(",", observation.Manuals ?? new List<string>()));
+                }
+            }
             AppendCanonical(builder, "marker", manifest.Marker);
             AppendCanonical(builder, "state", manifest.RunStateCode);
             AppendCanonical(builder, "runLength", manifest.RunDataLength.ToString(

@@ -137,7 +137,7 @@ class RecoverySourceTests(unittest.TestCase):
                 prepare_source(self.storage, self.snapshot_id, self.profile)
 
     def test_only_a_hot_preparation_of_the_selected_profile_is_a_source(self):
-        for key, value in (('schema', 6), ('captureBasis', 'native_export_reconstruction'), ('id', 'other'),
+        for key, value in (('schema', 8), ('captureBasis', 'native_export_reconstruction'), ('id', 'other'),
                            ('sourceProfilePath', str(self.profile.parent / 'other'))):
             with self.subTest(key=key), self.assertRaisesRegex(ProbeError, 'not a confirmed preparation'):
                 self.payload({**self.verified, key: value})

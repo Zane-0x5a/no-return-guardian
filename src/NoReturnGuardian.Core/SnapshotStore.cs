@@ -35,6 +35,8 @@ namespace NoReturnGuardian.Core
         public string JournalPath { get; private set; }
         public string VendorWitnessPath { get; private set; }
         public int AutomaticRetention { get; set; }
+        /// <summary>Read-only live native observation for manual or recorder-bound skill protection.</summary>
+        public Func<string, string, string, Result<SkillObservation>> SkillObservationReader { get; set; }
         public SnapshotHooks CaptureHooks { get; set; }
 
         /// <summary>
@@ -688,10 +690,26 @@ namespace NoReturnGuardian.Core
                         "The frozen R0A is not the hideout save the recorder bound.");
                 }
 
+                string sourceProfilePath = Path.GetFullPath(recordedProfilePath ?? before.ProfilePath);
+                string originalRunHash = FileTools.Sha256(
+                    PayloadPath(pendingPath, SaveLayout.GameRunPath),
+                    false);
+                Result<SkillProtection> skill = ProtectMissingSkillTree(
+                    pendingPath,
+                    sourceProfilePath,
+                    departure,
+                    originalRunHash);
+                if (!skill.Success)
+                {
+                    return Result<SnapshotRecord>.Fail(skill.Code, skill.Message);
+                }
+
+                SkillProtection skillProtection = skill.Value;
                 Result<VendorStockRepair> stock = ReturnLostVendorStock(
                     pendingPath,
-                    recordedProfilePath ?? before.ProfilePath,
-                    sourceStamps);
+                    sourceProfilePath,
+                    sourceStamps,
+                    originalRunHash);
                 if (!stock.Success)
                 {
                     return Result<SnapshotRecord>.Fail(stock.Code, stock.Message);
@@ -754,7 +772,9 @@ namespace NoReturnGuardian.Core
                         // still have been the live bytes.
                         string copiedHash = repair != null && IsRunWorkingFile(relativePath)
                             ? repair.OriginalRunSha256
-                            : FileTools.Sha256(payload, false);
+                            : skillProtection != null && IsRunWorkingFile(relativePath)
+                                ? skillProtection.OriginalRunSha256
+                                : FileTools.Sha256(payload, false);
                         if (!string.Equals(
                             sourceHash,
                             copiedHash,
@@ -805,6 +825,7 @@ namespace NoReturnGuardian.Core
 
                 SnapshotManifest manifest = new SnapshotManifest
                 {
+                    SchemaVersion = skillProtection == null ? 5 : 7,
                     Id = id,
                     CreatedUtc = _clock.UtcNow.ToUniversalTime().ToString("O"),
                     Kind = kind,
@@ -825,6 +846,7 @@ namespace NoReturnGuardian.Core
                     DepartureRunSha256 = departure == null ? null : departure.RunSha256.ToLowerInvariant(),
                     DepartureBasis = departure == null ? null : departure.Basis ?? DepartureEvidence.PreDepartureSave,
                     VendorStockRepair = repair,
+                    SkillProtection = skillProtection,
                     Marker = ReadPayloadMarker(pendingPath, entries),
                     RunStateCode = before.WorkingRunStateCode,
                     RunDataLength = entries.First(item => string.Equals(
@@ -905,10 +927,118 @@ namespace NoReturnGuardian.Core
         /// seed, the witness's stock is written back into both copied run mirrors. Returns null when nothing
         /// is returned; the live save is never touched.
         /// </summary>
+        private static bool SkillDepartureMatches(SkillObservation observation, DateTime departure)
+        {
+            DateTime observed;
+            long milliseconds = (long)(departure.ToUniversalTime() - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+            return observation != null && observation.Boundary == "departure"
+                && observation.DepartureObservedMs == milliseconds
+                && DateTime.TryParse(observation.ObservedUtc, null,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out observed)
+                && Math.Abs((observed.ToUniversalTime() - departure.ToUniversalTime()).TotalMilliseconds) < 1;
+        }
+
+        private Result<SkillProtection> ProtectMissingSkillTree(
+            string pendingPath,
+            string profilePath,
+            DepartureEvidence departure,
+            string originalRunHash)
+        {
+            string rawPath = PayloadPath(pendingPath, SaveLayout.GameRunPath);
+            byte[] original = File.ReadAllBytes(rawPath);
+            Result<SkillStateReading> state = SkillState.Read(original);
+            if (!state.Success)
+                return Result<SkillProtection>.Fail(state.Code, state.Message);
+            if (!state.Value.IsEllie)
+                return Result<SkillProtection>.Ok(null, "skill_state_other_character", "Another character's preparation.");
+            SkillObservation observation = null;
+            string observationPath = departure == null ? null : departure.SkillObservationPath;
+            if (!string.IsNullOrWhiteSpace(observationPath))
+            {
+                string stagingRoot = Path.GetFullPath(Path.Combine(StorageRoot, DepartureEvidence.StagingDirectoryName))
+                    .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                string full = Path.GetFullPath(observationPath);
+                if (!full.StartsWith(stagingRoot, StringComparison.OrdinalIgnoreCase)
+                    || !File.Exists(full))
+                {
+                    return Result<SkillProtection>.Fail(
+                        "skill_observation_unavailable",
+                        "The recorder's skill observation is unavailable.");
+                }
+
+                try
+                {
+                    observation = FileTools.ReadJson<SkillObservation>(full);
+                }
+                catch (Exception exception) when (
+                    exception is IOException
+                    || exception is UnauthorizedAccessException
+                    || exception is ArgumentException
+                    || exception is InvalidOperationException)
+                {
+                    return Result<SkillProtection>.Fail(
+                        "skill_observation_unavailable",
+                        "The recorder's skill observation could not be read.");
+                }
+            }
+            else if (departure == null && SkillObservationReader != null)
+            {
+                DateTime started = DateTime.UtcNow;
+                Result<SkillObservation> read = SkillObservationReader(
+                    profilePath,
+                    rawPath,
+                    departure == null ? "manual" : "departure");
+                if (!read.Success)
+                {
+                    return Result<SkillProtection>.Fail(read.Code, read.Message);
+                }
+
+                observation = read.Value;
+                DateTime observed;
+                if (observation == null || observation.Boundary != "manual"
+                    || !DateTime.TryParse(observation.ObservedUtc, null,
+                        System.Globalization.DateTimeStyles.RoundtripKind, out observed)
+                    || observed.ToUniversalTime() < started || observed.ToUniversalTime() > DateTime.UtcNow)
+                    return Result<SkillProtection>.Fail("skill_observation_mismatch", "The manual observation is outside this capture.");
+            }
+            if (departure != null && observation != null && !SkillDepartureMatches(observation, departure.ObservedUtc))
+                return Result<SkillProtection>.Fail("skill_observation_mismatch", "The skill observation is not from this departure.");
+
+            Result<byte[]> completed = SkillState.Complete(original, observation, profilePath);
+            if (!completed.Success)
+            {
+                return Result<SkillProtection>.Fail(completed.Code, completed.Message);
+            }
+
+            if (completed.Value.SequenceEqual(original))
+            {
+                return Result<SkillProtection>.Ok(null, completed.Code, completed.Message);
+            }
+
+            string evidence = Path.Combine(pendingPath, SkillState.OriginalEvidencePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(evidence));
+            File.WriteAllBytes(evidence, original);
+            byte[] completedBytes = completed.Value;
+            File.WriteAllBytes(rawPath, completedBytes);
+            File.WriteAllBytes(PayloadPath(pendingPath, SaveLayout.GameRunBackupPath), completedBytes);
+            SkillProtection protection = new SkillProtection
+            {
+                OriginalRunSha256 = originalRunHash,
+                CompletedRunSha256 = FileTools.Sha256Bytes(completedBytes),
+                EvidenceSha256 = FileTools.Sha256Bytes(original),
+                Observation = observation
+            };
+            return Result<SkillProtection>.Ok(
+                protection,
+                "skill_state_completed",
+                "The observed opening training manual was added to Guardian's copy.");
+        }
+
         private Result<VendorStockRepair> ReturnLostVendorStock(
             string pendingPath,
             string profilePath,
-            Dictionary<string, FileStamp> sourceStamps)
+            Dictionary<string, FileStamp> sourceStamps,
+            string originalRunHash)
         {
             FileStamp runStamp;
             if (!File.Exists(VendorWitnessPath)
@@ -969,7 +1099,7 @@ namespace NoReturnGuardian.Core
             return Result<VendorStockRepair>.Ok(
                 new VendorStockRepair
                 {
-                    OriginalRunSha256 = FileTools.Sha256Bytes(raw),
+                    OriginalRunSha256 = originalRunHash,
                     WitnessRunSha256 = witness.SourceRunSha256.ToLowerInvariant(),
                     Count = witness.Count,
                     Items = witness.Items.Select(item => item.ToLowerInvariant()).ToList()
@@ -1080,6 +1210,25 @@ namespace NoReturnGuardian.Core
                     PayloadPath(pendingPath, SaveLayout.GameProfileBackupPath),
                     profileDecode.Value.RawBytes);
 
+                Result<SkillProtection> skill = ProtectMissingSkillTree(pendingPath, before.ProfilePath, null,
+                    FileTools.Sha256Bytes(runDecode.Value.RawBytes));
+                if (!skill.Success) return Result<SnapshotRecord>.Fail(skill.Code, skill.Message);
+                SkillProtection skillProtection = skill.Value;
+                if (skillProtection != null)
+                {
+                    skillProtection.NativeExportSha256 = runDecode.Value.ExportSha256;
+                    skillProtection.NativeExportFooter = FileTools.ToHex(runDecode.Value.Footer);
+                    foreach (string relativePath in SaveLayout.CommittedSlotFiles)
+                        File.Delete(PayloadPath(pendingPath, relativePath));
+                    Result<RunSlotMetadata> synthesis = RunSlotSynthesizer.Synthesize(
+                        PayloadPath(pendingPath, SaveLayout.GameRunPath),
+                        NativeSourcePath(sourceRoot, SaveLayout.RunParamsPath),
+                        PayloadPath(pendingPath, SaveLayout.RunDataPath),
+                        PayloadPath(pendingPath, SaveLayout.RunParamsPath),
+                        PayloadPath(pendingPath, SaveLayout.RunIconPath), before.WorkingRunStateCode);
+                    if (!synthesis.Success) return Result<SnapshotRecord>.Fail(synthesis.Code, synthesis.Message);
+                }
+
                 if (CaptureHooks != null && CaptureHooks.AfterPayloadCopied != null)
                 {
                     CaptureHooks.AfterPayloadCopied();
@@ -1165,7 +1314,7 @@ namespace NoReturnGuardian.Core
 
                 SnapshotManifest manifest = new SnapshotManifest
                 {
-                    SchemaVersion = 6,
+                    SchemaVersion = skillProtection == null ? 6 : 7,
                     Id = id,
                     CreatedUtc = _clock.UtcNow.ToUniversalTime().ToString("O"),
                     Kind = SnapshotKinds.Manual,
@@ -1173,6 +1322,7 @@ namespace NoReturnGuardian.Core
                     SourceProfilePath = before.ProfilePath,
                     Purpose = SnapshotPurposes.Preparation,
                     CaptureBasis = SnapshotCaptureBases.NativeExportedState,
+                    SkillProtection = skillProtection,
                     PreparationConfirmation = PreparationConfirmations.UserConfirmedHideout,
                     Marker = ReadPayloadMarker(pendingPath, entries),
                     RunStateCode = before.WorkingRunStateCode,
@@ -2281,6 +2431,14 @@ namespace NoReturnGuardian.Core
                     }
                 }
 
+                Result<bool> skillVerification = VerifySkillProtection(record);
+                if (!skillVerification.Success)
+                {
+                    return Result<SnapshotRecord>.Fail(
+                        skillVerification.Code,
+                        skillVerification.Message);
+                }
+
                 VendorStockRepair repair = record.Manifest.VendorStockRepair;
                 if (repair != null)
                 {
@@ -2320,6 +2478,153 @@ namespace NoReturnGuardian.Core
                     "snapshot_verification_failed",
                     exception.Message);
             }
+        }
+
+        private Result<bool> VerifySkillProtection(SnapshotRecord record)
+        {
+            SkillProtection protection = record.Manifest.SkillProtection;
+            bool preparation = string.Equals(record.Manifest.Purpose, SnapshotPurposes.Preparation, StringComparison.OrdinalIgnoreCase);
+            if (!preparation)
+                return protection == null ? Result<bool>.Ok(true, "skill_state_exact", "The live state is kept exactly.")
+                    : Result<bool>.Fail("snapshot_skill_state_mismatch", "Live and undo states cannot carry skill repairs.");
+            if (protection == null)
+            {
+                string runPath = PayloadPath(record.DirectoryPath, SaveLayout.GameRunPath);
+                if (File.Exists(runPath))
+                {
+                    byte[] raw = File.ReadAllBytes(runPath);
+                    Result<SkillStateReading> state = SkillState.Read(raw);
+                    if (!state.Success)
+                        return Result<bool>.Fail(state.Code, state.Message);
+                    if (state.Value.MissingStartingTree)
+                    {
+                        return Result<bool>.Fail(
+                            "skill_state_incomplete",
+                            "Ellie's extra starting training manual is absent and has no trusted observation.");
+                    }
+                }
+                return Result<bool>.Ok(true, "skill_state_not_present", "No skill-state completion is recorded.");
+            }
+
+            if (record.Manifest.SchemaVersion < 7
+                || !SkillState.IsHex(protection.OriginalRunSha256, 64)
+                || !SkillState.IsHex(protection.CompletedRunSha256, 64)
+                || !SkillState.IsHex(protection.EvidenceSha256, 64)
+                || protection.Observation == null)
+            {
+                return Result<bool>.Fail(
+                    "snapshot_skill_state_mismatch",
+                    "The snapshot's skill-state evidence is incomplete.");
+            }
+
+            DateTime departureTime;
+            if (record.Manifest.Kind == SnapshotKinds.Departure
+                && (!DateTime.TryParse(record.Manifest.DepartureObservedUtc, null,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out departureTime)
+                    || !SkillDepartureMatches(protection.Observation, departureTime)))
+                return Result<bool>.Fail("snapshot_skill_state_mismatch", "The observation belongs to another departure.");
+
+            string evidence = Path.Combine(
+                record.DirectoryPath,
+                SkillState.OriginalEvidencePath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(evidence))
+            {
+                return Result<bool>.Fail(
+                    "snapshot_skill_evidence_missing",
+                    "The snapshot's original skill-state evidence is missing.");
+            }
+
+            byte[] original = File.ReadAllBytes(evidence);
+            if (record.Manifest.CaptureBasis == SnapshotCaptureBases.NativeExportedState)
+            {
+                byte[] export;
+                string detail, error;
+                if (!SkillState.IsHex(protection.NativeExportSha256, 64)
+                    || !SkillState.IsHex(protection.NativeExportFooter, 72)
+                    || !RunSlotSynthesizer.TryBuildObservedExport(original,
+                        FileTools.FromHex(protection.NativeExportFooter), out export, out detail, out error)
+                    || !string.Equals(FileTools.Sha256Bytes(export), protection.NativeExportSha256, StringComparison.OrdinalIgnoreCase))
+                    return Result<bool>.Fail("snapshot_skill_state_mismatch", "The original native export cannot be reconstructed.");
+            }
+            else if (protection.NativeExportSha256 != null || protection.NativeExportFooter != null)
+                return Result<bool>.Fail("snapshot_skill_state_mismatch", "Unexpected native export evidence.");
+            if (!string.Equals(
+                    FileTools.Sha256Bytes(original),
+                    protection.EvidenceSha256,
+                    StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(
+                    FileTools.Sha256Bytes(original),
+                    protection.OriginalRunSha256,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return Result<bool>.Fail(
+                    "snapshot_skill_evidence_hash_mismatch",
+                    "The snapshot's original skill-state evidence changed.");
+            }
+
+            Result<byte[]> expectedResult = SkillState.Complete(
+                original,
+                protection.Observation,
+                record.Manifest.SourceProfilePath);
+            if (!expectedResult.Success)
+            {
+                return Result<bool>.Fail(
+                    "snapshot_skill_state_mismatch",
+                    "The snapshot's skill-state observation no longer matches its original save.");
+            }
+
+            byte[] completed = expectedResult.Value;
+            if (!string.Equals(
+                    FileTools.Sha256Bytes(completed),
+                    protection.CompletedRunSha256,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return Result<bool>.Fail(
+                    "snapshot_skill_state_hash_mismatch",
+                    "The snapshot's completed skill-state hash does not match its evidence.");
+            }
+
+            byte[] expectedFinal = completed;
+            VendorStockRepair repair = record.Manifest.VendorStockRepair;
+            if (repair != null)
+            {
+                if (!string.Equals(
+                        repair.OriginalRunSha256,
+                        protection.OriginalRunSha256,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return Result<bool>.Fail(
+                        "snapshot_skill_state_mismatch",
+                        "The skill-state and trading-station repairs refer to different original saves.");
+                }
+                Result<VendorStockReading> stock = VendorStock.Read(completed);
+                if (!stock.Success)
+                {
+                    return Result<bool>.Fail(
+                        "snapshot_skill_state_mismatch",
+                        "The completed skill-state save cannot be read.");
+                }
+
+                expectedFinal = VendorStock.Repair(
+                    completed,
+                    stock.Value,
+                    new VendorStockWitness
+                    {
+                        Count = repair.Count,
+                        Items = repair.Items
+                    });
+            }
+
+            byte[] actual = File.ReadAllBytes(PayloadPath(record.DirectoryPath, SaveLayout.GameRunPath));
+            byte[] backup = File.ReadAllBytes(PayloadPath(record.DirectoryPath, SaveLayout.GameRunBackupPath));
+            if (!actual.SequenceEqual(expectedFinal) || !backup.SequenceEqual(expectedFinal))
+            {
+                return Result<bool>.Fail(
+                    "snapshot_skill_state_mismatch",
+                    "The snapshot payload does not contain the observed opening training manual.");
+            }
+
+            return Result<bool>.Ok(true, "skill_state_verified", "The observed opening training manual was verified.");
         }
 
         private IList<SnapshotRecord> ListSnapshotsInternal()
@@ -2380,6 +2685,11 @@ namespace NoReturnGuardian.Core
                         record.WorkingRunStateOffset = workingState.Value.Offset;
                         record.WorkingRunStateSignal = workingState.Value.StateSignal;
                     }
+                    string runPath = PayloadPath(directoryPath, SaveLayout.GameRunPath);
+                    Result<SkillStateReading> skills = SkillState.Read(File.ReadAllBytes(runPath));
+                    record.SkillStateUnavailable = !skills.Success || skills.Value.MissingStartingTree;
+                    if (record.SkillStateUnavailable)
+                        record.StatusMessage = skills.Success ? "skill_state_incomplete" : "skill_state_unreadable";
                 }
                 return record;
             }
@@ -2400,7 +2710,8 @@ namespace NoReturnGuardian.Core
                     && manifest.SchemaVersion != 3
                     && manifest.SchemaVersion != 4
                     && manifest.SchemaVersion != 5
-                    && manifest.SchemaVersion != 6))
+                    && manifest.SchemaVersion != 6
+                    && manifest.SchemaVersion != 7))
             {
                 return "Unsupported or missing snapshot manifest.";
             }
