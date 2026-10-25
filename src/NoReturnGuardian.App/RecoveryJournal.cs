@@ -98,6 +98,13 @@ namespace NoReturnGuardian
                 return _fields.TryGetValue(name, out value) ? value as string : null;
             }
 
+            public Entry Object(string name)
+            {
+                object value;
+                var fields = _fields.TryGetValue(name, out value) ? value as Dictionary<string, object> : null;
+                return fields == null ? null : new Entry(fields);
+            }
+
             public bool? Flag(string name)
             {
                 object value;

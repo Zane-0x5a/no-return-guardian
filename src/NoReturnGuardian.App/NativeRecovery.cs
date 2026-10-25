@@ -671,6 +671,17 @@ namespace NoReturnGuardian
             }
         }
 
+        /// <summary>只认这一轮实际写下的出发记录，不把旧记录或最初的备用编号当作本轮成功。</summary>
+        public static string ReadRecordedDeparture(string logPath)
+        {
+            try
+            {
+                RecoveryJournal.Entry entry = RecoveryJournal.Read(logPath).OfKind("departure-recorded").LastOrDefault();
+                return entry?.Object("departure")?.Text("snapshotId");
+            }
+            catch (Exception error) when (RecoveryJournal.Unreadable(error)) { return null; }
+        }
+
         /// <summary>重开结果的玩家可读说明；不把机械完成说成游戏内验收。</summary>
         public static string DescribeOutcome(RecoveryOutcome outcome)
         {

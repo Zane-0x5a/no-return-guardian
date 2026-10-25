@@ -13,6 +13,8 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import queue
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -23,7 +25,8 @@ import traceback
 from NativeCheckpointProbe import FRIDA_DEPS, ProbeError, ReadOnlyProcess, verify_build
 from NativeCheckpointTrigger import fingerprints, process_birth, verify_live
 from NativeDepartureRecord import departure_path, departure_slots, new_departure, write_departure
-from NativeDepartureStage import HideoutStage, protect_departure, exported_raw
+from NativeDepartureStage import HideoutStage, protect_departure, exported_raw, timestamp_ns
+from NativeRecoverySource import verify_formally
 from NativeEncounterRestart import (arm_decision, code_restored, control_configuration, hideout_state,
                                     run_control, save_workers, task_identity)
 
@@ -78,14 +81,75 @@ def arguments(argv=None):
     return args
 
 
-def watch_stdin(stopping):
-    """Guardian closes our stdin to ask for a clean detach."""
+def watch_stdin(stopping, commands):
+    """Bounded commands update the owner without throwing away the hideout watch; EOF still detaches."""
     try:
-        while sys.stdin.readline():
-            pass
+        while True:
+            line = sys.stdin.readline(4097)
+            if not line:
+                break
+            if len(line) > 4096 or not line.endswith('\n'):
+                # Invalid framing is not a request to arm, and must not grow an unbounded input buffer.
+                stopping.set()
+                return
+            try:
+                command = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(command, dict) or command.get('kind') != 'confirm-manual':
+                continue
+            try:
+                commands.put_nowait(command)
+            except queue.Full:
+                try:
+                    commands.get_nowait()
+                except queue.Empty:
+                    pass
+                commands.put_nowait(command)
     except (OSError, ValueError):
         pass
     stopping.set()
+
+
+class ManualHandoff:
+    """Consume a fresh, same-process manual confirmation on the recorder's main thread."""
+
+    def __init__(self, args, birth, inbox, record):
+        self.args, self.birth, self.inbox, self.record = args, birth, inbox, record
+        self.owner, self.departed = args.snapshot, False
+
+    def apply(self, stage, playable, now=time.time):
+        while True:
+            try:
+                command = self.inbox.get_nowait()
+            except queue.Empty:
+                return
+            snapshot = command.get('snapshotId')
+            try:
+                if (self.departed or command.get('pid') != self.args.pid or
+                        command.get('birth') != str(self.birth) or
+                        not isinstance(snapshot, str) or not re.fullmatch(
+                            r'\d{8}-\d{9}-manual-[a-f0-9]{8}', snapshot) or not playable()):
+                    raise ProbeError('manual confirmation no longer belongs to this playable hideout')
+                receipt = verify_formally(self.args.storage, snapshot)
+                source = receipt.get('manualSource')
+                if not isinstance(source, dict):
+                    raise ProbeError('formal verifier did not confirm this manual source')
+                if (receipt.get('kind') != 'manual' or receipt.get('use') != 'hideout' or
+                        source.get('SnapshotId') != snapshot or
+                        source.get('ManifestSha256') != receipt.get('manifestSha256') or
+                        self.args.profile is not None and Path(source['ProfilePath']).resolve() != self.args.profile.resolve()):
+                    raise ProbeError('formal verifier did not confirm this manual source')
+                confirmed = timestamp_ns(source['ConfirmedUtc'])
+                if not (filetime_ns(self.birth) <= confirmed <= now() * 10**9 and
+                        now() * 10**9 - confirmed <= 60 * 10**9) or not playable():
+                    raise ProbeError('manual confirmation expired or the hideout changed')
+                self.owner = snapshot
+                frozen = stage is not None and stage.confirm_manual(source)
+                self.record({'kind': 'departure-manual-handoff', 'snapshotId': snapshot,
+                             'sourceFrozen': frozen, 'manifestSha256': source['ManifestSha256']})
+            except (ProbeError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+                self.record({'kind': 'departure-manual-handoff-refused', 'snapshotId': snapshot, 'reason': str(error)})
 
 
 def wait_for_hideout(args, process, base, birth, stopping, record, owner):
@@ -119,12 +183,16 @@ class HideoutWatch:
     stops, the game exits, the run is left, or an encounter starts without a captured departure. The player
     may stay in the hideout as long as they like."""
 
-    def __init__(self, process, base, birth, stage, stopping, record):
+    def __init__(self, process, base, birth, stage, stopping, record, handoff=None):
         self.process, self.base, self.birth = process, base, birth
         self.stage, self.stopping, self.record = stage, stopping, record
         self.checked, self.encounter, self.reason, self.stage_error = 0.0, 0, None, None
+        self.handoff = handoff
 
     def __call__(self):
+        if self.handoff is not None:
+            self.handoff.apply(self.stage, lambda: arm_decision(hideout_state(self.process, self.base)) == 'arm'
+                               and save_workers(self.process, self.base) == [0, 0, 0])
         if self.stage is not None:
             try:
                 self.stage.poll()
@@ -163,7 +231,11 @@ def protect(args, stage, captured, index, owner, stopping, record, birth=None, d
         record({'kind': 'departure-save-bound', 'runSha256': frozen['sha256'], 'basis': frozen['basis'],
                 'savedAtMs': frozen['savedAtNs'] // 1_000_000, 'eventMs': captured['time']})
         observation_path = observe_skill_state(args, frozen['path'], captured, birth, digest, record)
-        if observation_path is None:
+        manual = frozen.get('manualSnapshot')
+        if manual is not None:
+            receipt = protect_departure(args.storage, args.profile, index, captured['time'], frozen['sha256'],
+                                        frozen['path'], frozen['basis'], observation_path, manual)
+        elif observation_path is None:
             receipt = protect_departure(args.storage, args.profile, index, captured['time'], frozen['sha256'],
                                         frozen['path'], frozen['basis'])
         else:
@@ -223,10 +295,13 @@ def await_arrival(process, base, birth, stopping):
 def record_departure(argv=None):
     args = arguments(argv)
     process = session = stage = code = None
-    stopping = threading.Event()
-    threading.Thread(target=watch_stdin, args=(stopping,), daemon=True).start()
+    stopping, inbox = threading.Event(), queue.Queue(maxsize=16)
+    handoff = None
+    threading.Thread(target=watch_stdin, args=(stopping, inbox), daemon=True).start()
     with args.log.open('x', encoding='utf-8') as log:
         def record(payload):
+            if handoff is not None and payload.get('kind') == 'departure-captured':
+                handoff.departed = True
             log.write(json.dumps(payload, ensure_ascii=False) + '\n')
             log.flush()
             print(json.dumps(payload, ensure_ascii=False), flush=True)
@@ -245,6 +320,8 @@ def record_departure(argv=None):
                     'snapshotId': args.snapshot, 'autoProtect': args.profile is not None, 'sha256': digest})
             # Owns this hideout's departure when it cannot be protected as a preparation of its own.
             owner = wait_for_hideout(args, process, base, birth, stopping, record, args.snapshot)
+            handoff = ManualHandoff(args, birth, inbox, record)
+            handoff.owner = owner
             if args.profile is not None:
                 def playable():
                     current = hideout_state(process, base)
@@ -259,13 +336,15 @@ def record_departure(argv=None):
                     stage.poll()
                 except OSError as error:
                     record({'kind': 'departure-stage-skipped', 'reason': str(error)})
+            handoff.apply(stage, lambda: arm_decision(hideout_state(process, base)) == 'arm'
+                          and save_workers(process, base) == [0, 0, 0])
             sys.path.insert(0, str(FRIDA_DEPS))
             import frida
 
             session = frida.attach(args.pid)
             if process_birth(process) != birth:
                 raise ProbeError('Process identity changed during attach')
-            watch = HideoutWatch(process, base, birth, stage, stopping, record)
+            watch = HideoutWatch(process, base, birth, stage, stopping, record, handoff)
             events, errors = run_control(session, control_configuration('record', args.pid, base, code, args.duration),
                                          record, args.duration + 5, watch)
             captured = next((event for event in events if event.get('kind') == 'departure-captured'), None)
@@ -274,6 +353,7 @@ def record_departure(argv=None):
             if captured is None:
                 raise Stopped(watch.reason or 'no-departure-captured')
             raw, index = departure_slots(captured.get('slots'), captured.get('count'))
+            owner = handoff.owner
             try:
                 owner, protected = protect(args, stage, captured, index, owner, stopping, record, birth, digest)
             except Stopped as stop:

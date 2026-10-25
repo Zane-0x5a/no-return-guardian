@@ -70,6 +70,9 @@ namespace NoReturnGuardian.Core
         /// </summary>
         public const string RunStartExport = "run_start_export";
 
+        public const string ConfirmedManualSave = "confirmed_manual_save";
+        public const string ConfirmedManualExport = "confirmed_manual_export";
+
         /// <summary>The run play time, in the state code's last field, of every observed opening save.</summary>
         public const uint RunStartMaximumSeconds = 1;
 
@@ -85,10 +88,19 @@ namespace NoReturnGuardian.Core
         /// <summary>Which save the recorder froze: <see cref="PreDepartureSave"/> unless it is a run's opening save.</summary>
         public string Basis { get; set; }
 
+        public string ManualSnapshotId { get; set; }
+        public ManualDepartureSource ManualSource { get; set; }
+
         /// <summary>A basis whose hideout can be restored: the save before the departure, or a run's opening save.</summary>
         public static bool IsPreparationBasis(string basis)
         {
-            return string.Equals(basis, PreDepartureSave, StringComparison.Ordinal) || IsRunStartBasis(basis);
+            return string.Equals(basis, PreDepartureSave, StringComparison.Ordinal) || IsRunStartBasis(basis)
+                || IsManualBasis(basis);
+        }
+
+        public static bool IsManualBasis(string basis)
+        {
+            return basis == ConfirmedManualSave || basis == ConfirmedManualExport;
         }
 
         /// <summary>Optional recorder-created JSON observation kept under departure staging.</summary>
@@ -234,6 +246,8 @@ namespace NoReturnGuardian.Core
         /// after the departure (see there).
         /// </summary>
         public string DepartureBasis { get; set; }
+        public ManualDepartureSource DepartureManualSource { get; set; }
+        public List<SnapshotFileEntry> ManualNativeSourceEvidence { get; set; }
         /// <summary>Recorder-side event observation used to complete a verified Ellie opening tree.</summary>
         public SkillProtection SkillProtection { get; set; }
         /// <summary>
@@ -404,7 +418,8 @@ namespace NoReturnGuardian.Core
                 && (manifest.DepartureBasis == null
                     || string.Equals(manifest.DepartureBasis, DepartureEvidence.PreDepartureSave, StringComparison.Ordinal)
                     || DepartureEvidence.IsRunStartBasis(manifest.DepartureBasis)
-                    && DepartureEvidence.IsRunStartCode(manifest.RunStateCode));
+                    && DepartureEvidence.IsRunStartCode(manifest.RunStateCode)
+                    || DepartureEvidence.IsManualBasis(manifest.DepartureBasis) && manifest.DepartureManualSource != null);
         }
 
         public static bool HasCoherentWorkingStateEvidence(SnapshotManifest manifest)

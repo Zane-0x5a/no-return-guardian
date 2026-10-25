@@ -421,7 +421,24 @@ namespace NoReturnGuardian.Core
                         "A departure capture needs the recorder's frozen hideout save inside this storage.");
                 }
 
-                if (!string.Equals(basis, DepartureEvidence.RunStartExport, StringComparison.Ordinal))
+                if (DepartureEvidence.IsManualBasis(basis))
+                {
+                    Result<SnapshotRecord> manual = VerifySnapshot(departure.ManualSnapshotId, true);
+                    ManualDepartureSource source = manual.Success ? ManualDepartureSource.FromVerified(manual.Value) : null;
+                    DateTime confirmed;
+                    if (source == null || source.IsExport != (basis == DepartureEvidence.ConfirmedManualExport)
+                        || !string.Equals(Path.GetFullPath(source.ProfilePath), Path.GetFullPath(profilePath), StringComparison.OrdinalIgnoreCase)
+                        || !DateTime.TryParse(source.ConfirmedUtc, null, System.Globalization.DateTimeStyles.RoundtripKind, out confirmed)
+                        || confirmed.ToUniversalTime() >= departure.ObservedUtc.ToUniversalTime()
+                        || !source.MatchesFiles(staged))
+                        return Result<SnapshotRecord>.Fail("departure_manual_source_mismatch",
+                            "The frozen source is not the original of this confirmed manual preparation.");
+                    departure.ManualSource = source;
+                }
+                else if (departure.ManualSnapshotId != null || departure.ManualSource != null)
+                    return Result<SnapshotRecord>.Fail("departure_manual_source_mismatch", "Unexpected manual source evidence.");
+
+                if (basis != DepartureEvidence.RunStartExport && basis != DepartureEvidence.ConfirmedManualExport)
                 {
                     return CaptureHotWorkingState(staged, null, departure, Path.GetFullPath(profilePath));
                 }
@@ -429,7 +446,7 @@ namespace NoReturnGuardian.Core
                 string rebuilt = null;
                 try
                 {
-                    Result<string> working = RebuildOpeningExport(staged);
+                    Result<string> working = RebuildOpeningExport(staged, basis == DepartureEvidence.RunStartExport);
                     if (!working.Success)
                     {
                         return Result<SnapshotRecord>.Fail(working.Code, working.Message);
@@ -453,7 +470,7 @@ namespace NoReturnGuardian.Core
         /// envelope beside the frozen exports through the verified transforms, each file with its export's
         /// timestamp, so the ordinary hot-capture gates read it as they would have read the working files.
         /// </summary>
-        private static Result<string> RebuildOpeningExport(string staged)
+        private static Result<string> RebuildOpeningExport(string staged, bool openingOnly = true)
         {
             string rebuilt = null;
             bool done = false;
@@ -473,7 +490,7 @@ namespace NoReturnGuardian.Core
                         "The frozen opening save is not a complete native export.");
                 }
 
-                if (!DepartureEvidence.IsRunStartCode(source.WorkingRunStateCode))
+                if (openingOnly && !DepartureEvidence.IsRunStartCode(source.WorkingRunStateCode))
                 {
                     return Result<string>.Fail(
                         "departure_save_not_run_start",
@@ -659,6 +676,8 @@ namespace NoReturnGuardian.Core
                 string id = BuildSnapshotId(kind);
                 pendingPath = Path.Combine(SnapshotsRoot, ".pending-" + id);
                 Directory.CreateDirectory(Path.Combine(pendingPath, "payload"));
+                List<SnapshotFileEntry> manualNativeSourceEvidence = CopyManualNativeSourceEvidence(
+                    pendingPath, departure);
 
                 Dictionary<string, FileStamp> sourceStamps = before.Files.ToDictionary(
                     item => item.RelativePath,
@@ -705,11 +724,9 @@ namespace NoReturnGuardian.Core
                 }
 
                 SkillProtection skillProtection = skill.Value;
-                Result<VendorStockRepair> stock = ReturnLostVendorStock(
-                    pendingPath,
-                    sourceProfilePath,
-                    sourceStamps,
-                    originalRunHash);
+                Result<VendorStockRepair> stock = departure != null && departure.Basis == DepartureEvidence.ConfirmedManualExport
+                    ? Result<VendorStockRepair>.Ok(null, "vendor_stock_kept", "Native-export sources are kept exactly.")
+                    : ReturnLostVendorStock(pendingPath, sourceProfilePath, sourceStamps, originalRunHash);
                 if (!stock.Success)
                 {
                     return Result<SnapshotRecord>.Fail(stock.Code, stock.Message);
@@ -845,8 +862,10 @@ namespace NoReturnGuardian.Core
                         : departure.ObservedUtc.ToUniversalTime().ToString("O"),
                     DepartureRunSha256 = departure == null ? null : departure.RunSha256.ToLowerInvariant(),
                     DepartureBasis = departure == null ? null : departure.Basis ?? DepartureEvidence.PreDepartureSave,
+                    DepartureManualSource = departure == null ? null : departure.ManualSource,
                     VendorStockRepair = repair,
                     SkillProtection = skillProtection,
+                    ManualNativeSourceEvidence = manualNativeSourceEvidence,
                     Marker = ReadPayloadMarker(pendingPath, entries),
                     RunStateCode = before.WorkingRunStateCode,
                     RunDataLength = entries.First(item => string.Equals(
@@ -1197,6 +1216,27 @@ namespace NoReturnGuardian.Core
                         PayloadPath(pendingPath, relativePath));
                 }
 
+                // Unlike the R0A slot, the 0P slot's source metadata/icon are not part of the restore envelope.
+                // Preserve the original slot metadata/icon witnesses so a later same-run manual handoff can prove
+                // the exact native export batch it observed without trusting synthesized metadata.
+                var manualNativeEvidence = new List<SnapshotFileEntry>();
+                foreach (string relativePath in new[] { SaveLayout.RunParamsPath, SaveLayout.RunIconPath,
+                    SaveLayout.ProfileParamsPath, SaveLayout.ProfileIconPath })
+                {
+                    FileStamp stamp = sourceStamps[relativePath];
+                    string source = NativeSourcePath(sourceRoot, relativePath);
+                    string evidencePath = ManualNativeEvidencePath(pendingPath, relativePath);
+                    Directory.CreateDirectory(Path.GetDirectoryName(evidencePath));
+                    FileTools.CopyShared(source, evidencePath);
+                    File.SetLastWriteTimeUtc(evidencePath, new DateTime(stamp.LastWriteUtcTicks, DateTimeKind.Utc));
+                    manualNativeEvidence.Add(new SnapshotFileEntry
+                    {
+                        RelativePath = relativePath, Length = stamp.Length,
+                        LastWriteUtc = new DateTime(stamp.LastWriteUtcTicks, DateTimeKind.Utc).ToString("O"),
+                        Sha256 = FileTools.Sha256(evidencePath, false)
+                    });
+                }
+
                 WritePayloadBytes(
                     PayloadPath(pendingPath, SaveLayout.GameRunPath),
                     runDecode.Value.RawBytes);
@@ -1323,6 +1363,7 @@ namespace NoReturnGuardian.Core
                     Purpose = SnapshotPurposes.Preparation,
                     CaptureBasis = SnapshotCaptureBases.NativeExportedState,
                     SkillProtection = skillProtection,
+                    ManualNativeSourceEvidence = manualNativeEvidence,
                     PreparationConfirmation = PreparationConfirmations.UserConfirmedHideout,
                     Marker = ReadPayloadMarker(pendingPath, entries),
                     RunStateCode = before.WorkingRunStateCode,
@@ -2431,6 +2472,17 @@ namespace NoReturnGuardian.Core
                     }
                 }
 
+                Result<bool> sourceEvidence = VerifyManualNativeSourceEvidence(record);
+                if (!sourceEvidence.Success)
+                    return Result<SnapshotRecord>.Fail(sourceEvidence.Code, sourceEvidence.Message);
+
+                bool manualBasis = DepartureEvidence.IsManualBasis(record.Manifest.DepartureBasis);
+                if (manualBasis != (record.Manifest.DepartureManualSource != null)
+                    || manualBasis && (record.Manifest.Kind != SnapshotKinds.Departure
+                        || !record.Manifest.DepartureManualSource.MatchesPayload(record)))
+                    return Result<SnapshotRecord>.Fail("departure_manual_source_mismatch",
+                        "The departure's confirmed manual source does not match its original payload.");
+
                 Result<bool> skillVerification = VerifySkillProtection(record);
                 if (!skillVerification.Success)
                 {
@@ -2625,6 +2677,81 @@ namespace NoReturnGuardian.Core
             }
 
             return Result<bool>.Ok(true, "skill_state_verified", "The observed opening training manual was verified.");
+        }
+
+        private static Result<bool> VerifyManualNativeSourceEvidence(SnapshotRecord record)
+        {
+            List<SnapshotFileEntry> evidence = record.Manifest.ManualNativeSourceEvidence;
+            bool nativeSource = record.Manifest.Kind == SnapshotKinds.Manual
+                && record.Manifest.CaptureBasis == SnapshotCaptureBases.NativeExportedState
+                || record.Manifest.Kind == SnapshotKinds.Departure
+                    && record.Manifest.DepartureManualSource != null
+                    && record.Manifest.DepartureManualSource.CaptureBasis == SnapshotCaptureBases.NativeExportedState;
+            if (evidence == null)
+                return record.Manifest.Kind == SnapshotKinds.Departure
+                    && record.Manifest.DepartureManualSource != null
+                    && record.Manifest.DepartureManualSource.CaptureBasis == SnapshotCaptureBases.NativeExportedState
+                    ? Result<bool>.Fail("snapshot_native_source_evidence_missing", "A native manual snapshot is missing its source metadata evidence.")
+                    : Result<bool>.Ok(true, "native_source_not_applicable", "No native source evidence is required.");
+            string[] expected = { SaveLayout.RunParamsPath, SaveLayout.RunIconPath,
+                SaveLayout.ProfileParamsPath, SaveLayout.ProfileIconPath };
+            if (!nativeSource || evidence.Count != expected.Length
+                || expected.Any(path => evidence.Count(item => item != null && item.RelativePath == path) != 1))
+                return Result<bool>.Fail("snapshot_native_source_evidence_invalid", "Native source evidence has an unexpected shape.");
+            if (record.Manifest.Kind == SnapshotKinds.Departure
+                && expected.Any(path => !record.Manifest.DepartureManualSource.Files.Any(item => item.RelativePath == path
+                    && evidence.Any(copied => copied.RelativePath == path && copied.Length == item.Length
+                        && copied.LastWriteUtc == item.LastWriteUtc
+                        && string.Equals(copied.Sha256, item.Sha256, StringComparison.OrdinalIgnoreCase)))))
+                return Result<bool>.Fail("snapshot_native_source_evidence_mismatch", "Copied manual source evidence differs from its confirmation.");
+            foreach (SnapshotFileEntry entry in evidence)
+            {
+                string path = ManualNativeEvidencePath(record.DirectoryPath, entry.RelativePath);
+                var info = new FileInfo(path);
+                DateTime written;
+                if (!info.Exists || info.Length != entry.Length || !SkillState.IsHex(entry.Sha256, 64)
+                    || !string.Equals(FileTools.Sha256(path, false), entry.Sha256, StringComparison.OrdinalIgnoreCase)
+                    || !DateTime.TryParse(entry.LastWriteUtc, null, System.Globalization.DateTimeStyles.RoundtripKind, out written))
+                    return Result<bool>.Fail("snapshot_native_source_evidence_mismatch", "Native source metadata or icon evidence changed.");
+            }
+            return Result<bool>.Ok(true, "native_source_verified", "Native source metadata and icon evidence is verified.");
+        }
+
+        private static List<SnapshotFileEntry> CopyManualNativeSourceEvidence(string pendingPath, DepartureEvidence departure)
+        {
+            if (departure == null || departure.ManualSource == null || !departure.ManualSource.IsExport)
+                return null;
+            string[] relativePaths = { SaveLayout.RunParamsPath, SaveLayout.RunIconPath,
+                SaveLayout.ProfileParamsPath, SaveLayout.ProfileIconPath };
+            var copied = new List<SnapshotFileEntry>();
+            foreach (string relative in relativePaths)
+            {
+                SnapshotFileEntry expected = departure.ManualSource.Files.Single(item => item.RelativePath == relative);
+                string source = SaveLayout.CombineUnderProfile(departure.StagedPath, relative);
+                string target = ManualNativeEvidencePath(pendingPath, relative);
+                FileInfo sourceInfo = new FileInfo(source);
+                DateTime written;
+                if (!sourceInfo.Exists || sourceInfo.Length != expected.Length
+                    || !DateTime.TryParse(expected.LastWriteUtc, null,
+                        System.Globalization.DateTimeStyles.RoundtripKind, out written)
+                    || sourceInfo.LastWriteTimeUtc != written.ToUniversalTime()
+                    || !string.Equals(FileTools.Sha256(source, true), expected.Sha256, StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("The confirmed native source metadata changed before capture.");
+                Directory.CreateDirectory(Path.GetDirectoryName(target));
+                FileTools.CopyShared(source, target);
+                File.SetLastWriteTimeUtc(target, written.ToUniversalTime());
+                if (new FileInfo(target).Length != expected.Length
+                    || !string.Equals(FileTools.Sha256(target, false), expected.Sha256, StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("The confirmed native source metadata copy changed.");
+                copied.Add(new SnapshotFileEntry { RelativePath = relative, Length = expected.Length,
+                    LastWriteUtc = expected.LastWriteUtc, Sha256 = expected.Sha256 });
+            }
+            return copied;
+        }
+
+        private static string ManualNativeEvidencePath(string root, string relativePath)
+        {
+            return Path.Combine(root, "evidence", "manual-native-source", relativePath.Replace('/', Path.DirectorySeparatorChar));
         }
 
         private IList<SnapshotRecord> ListSnapshotsInternal()

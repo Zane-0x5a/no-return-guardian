@@ -165,6 +165,7 @@ internal static class TestNativeRecoveryDialog
             var recorderStop = dialogType.GetMethod("DescribeRecorderStop", BindingFlags.Public | BindingFlags.Static);
             string recorderLog = Path.Combine(root, "departure.jsonl");
             var readProtected = dialogType.GetMethod("ReadProtectedDeparture", BindingFlags.Public | BindingFlags.Static);
+            var readRecorded = dialogType.GetMethod("ReadRecordedDeparture", BindingFlags.Public | BindingFlags.Static);
             Func<string, bool, string> stopReason = (reason, protecting) =>
             {
                 File.WriteAllLines(recorderLog, new[]
@@ -198,6 +199,13 @@ internal static class TestNativeRecoveryDialog
             File.AppendAllText(recorderLog, serializer.Serialize(new Dictionary<string, object>
                 { {"kind", "departure-protected"}, {"snapshotId", "departure-new"} }) + Environment.NewLine, new UTF8Encoding(false));
             Require((string)readProtected.Invoke(null, new object[] { recorderLog }) == "departure-new", "The protected departure is read back");
+            Require(readRecorded.Invoke(null, new object[] { recorderLog }) == null,
+                "A published snapshot does not claim that this departure was recorded");
+            File.AppendAllText(recorderLog, serializer.Serialize(new Dictionary<string, object>
+                { {"kind", "departure-recorded"}, {"departure", new Dictionary<string, object> { {"snapshotId", "manual-updated"} }} })
+                + Environment.NewLine, new UTF8Encoding(false));
+            Require((string)readRecorded.Invoke(null, new object[] { recorderLog }) == "manual-updated",
+                "The record's actual owner wins over the recorder's original owner");
             File.WriteAllText(recorderLog, "", new UTF8Encoding(false));
             Require(((string)recorderStop.Invoke(null, new object[] { recorderLog, false })).Contains("意外退出"), "A silent recorder exit is reported");
             Require(((string)recorderStop.Invoke(null, new object[] { Path.Combine(root, "missing.jsonl"), true })).Contains("不可读"),

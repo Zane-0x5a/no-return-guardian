@@ -24,6 +24,7 @@ import re
 import shutil
 import subprocess
 import time
+from datetime import datetime, timezone
 
 from NativeCheckpointProbe import TOOLS, ProbeError
 from NativeDepartureRecord import SNAPSHOT_ID
@@ -49,6 +50,9 @@ STAGING = 'departure-staging'
 PRE_DEPARTURE_SAVE = 'pre_departure_save'
 RUN_START_SAVE = 'run_start_save'
 RUN_START_EXPORT = 'run_start_export'
+CONFIRMED_MANUAL_SAVE = 'confirmed_manual_save'
+CONFIRMED_MANUAL_EXPORT = 'confirmed_manual_export'
+EXPORT_BASES = (RUN_START_EXPORT, CONFIRMED_MANUAL_EXPORT)
 # The run play time, in the state code's last field, of every observed opening save.
 RUN_START_SECONDS = 1
 RECOGNIZED_WORDS = ('00800000', '00800001')
@@ -60,6 +64,15 @@ CHECKSUM_OFFSET = 1424
 DESCRIPTION_OFFSET = 1444
 DEPARTURE_SAVE_TIMEOUT = 8
 SAVE_SETTLE = 0.3
+
+
+def timestamp_ns(text):
+    """A .NET round-trip timestamp without losing the seventh fractional digit to a float."""
+    match = re.fullmatch(r'(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,7}))?(Z|\+00:00)', text)
+    if match is None:
+        raise ProbeError('manual source timestamp is invalid')
+    seconds = int(datetime.fromisoformat(match[1]).replace(tzinfo=timezone.utc).timestamp())
+    return seconds * 10**9 + int((match[2] or '').ljust(9, '0'))
 
 
 def file_stamps(profile, names):
@@ -218,19 +231,65 @@ class HideoutStage:
             return
         self.freeze(basis, names, watch, stamps, now)
 
-    def freeze(self, basis, names, watch, stamps, now):
-        contents = [shared_read(self.profile / name) for name in names]
+    def confirm_manual(self, source):
+        """Freeze only the exact original authenticated by a fresh formal manual-capture receipt.
+
+        The caller verifies the receipt, process, profile, freshness and playable scene. All source hashes
+        are checked again against this copy, so repaired snapshot bytes can never stand in for live bytes.
+        A continuously observed identical copy already has stronger provenance and is kept as-is.
+        """
+        if not isinstance(source, dict) or not self.playable():
+            return False
+        exported = source.get('CaptureBasis') == 'native_exported_state'
+        if source.get('CaptureBasis') not in ('native_exported_state', 'hot_synthesized_state'):
+            return False
+        stamps = file_stamps(self.profile, TRACKED)
+        names = EXPORT_FILES if exported else STAGE_FILES
+        if None in project(stamps, names) or exported and any(project(stamps, WORKING_FILES[:4])):
+            return False
+        expected = EXPORT_FILES if exported else WORKING_FILES
+        entries = source.get('Files')
+        if (not isinstance(entries, list) or len(entries) != len(expected) or
+                {entry.get('RelativePath') for entry in entries if isinstance(entry, dict)} != set(expected)):
+            return False
+        contents = {name: shared_read(self.profile / name) for name in names}
+        for entry in entries:
+            data = contents[entry['RelativePath']]
+            if len(data) != entry.get('Length') or hashlib.sha256(data).hexdigest() != str(entry.get('Sha256')).lower():
+                return False
+            written = entry.get('LastWriteUtc')
+            if written is not None and timestamp_ns(written) != project(stamps, (entry['RelativePath'],))[0][1]:
+                return False
+        if stamps != file_stamps(self.profile, TRACKED) or not self.playable():
+            return False
+        now = self.clock()
+        self.seen, self.since = stamps, now
+        self.observed = (self.observed + [(now, stamps)])[-16:]
+        if self.staged is not None and self.staged['stamps'] == project(stamps, self.staged['watch']):
+            return True
+        basis = CONFIRMED_MANUAL_EXPORT if exported else CONFIRMED_MANUAL_SAVE
+        self.freeze(basis, names, TRACKED if exported else STAGE_FILES, stamps, now, contents=contents)
+        if self.staged is None or self.staged['basis'] != basis or self.staged['frozenAt'] != now:
+            return False
+        self.staged['manualSnapshot'] = source['SnapshotId']
+        return True
+
+    def freeze(self, basis, names, watch, stamps, now, contents=None):
+        contents = ([contents[name] for name in names] if contents is not None else
+                    [shared_read(self.profile / name) for name in names])
         chosen = project(stamps, names)
         if (project(file_stamps(self.profile, TRACKED), names) != chosen or
                 any(len(data) != size for data, (size, _) in zip(contents, chosen))):
             return
         # Divergent mirrors are no capturable save; Guardian's gate would reject the copy anyway.
-        if basis != RUN_START_EXPORT and (contents[0] != contents[1] or contents[2] != contents[3]):
+        if basis not in EXPORT_BASES and (contents[0] != contents[1] or contents[2] != contents[3]):
             return
         try:
-            raw = exported_raw(contents[names.index(RUN_SLOT_FILES[0])]) if basis == RUN_START_EXPORT else contents[0]
-            if basis != PRE_DEPARTURE_SAVE and not opening_code(run_code(raw)):
+            raw = exported_raw(contents[names.index(RUN_SLOT_FILES[0])]) if basis in EXPORT_BASES else contents[0]
+            if basis in (RUN_START_SAVE, RUN_START_EXPORT) and not opening_code(run_code(raw)):
                 raise ProbeError('not a run opening save')
+            if basis in (CONFIRMED_MANUAL_SAVE, CONFIRMED_MANUAL_EXPORT) and run_code(raw)[8:16] not in RECOGNIZED_WORDS:
+                raise ProbeError('unrecognized confirmed manual save')
         except ProbeError:
             # An encounter's last save, a later save or an unknown shape: no opening save, never frozen.
             self.judged = stamps
@@ -243,7 +302,7 @@ class HideoutStage:
             path.write_bytes(data)
             os.utime(path, ns=(mtime, mtime))
         previous = self.staged
-        written = WORKING_FILES if basis != RUN_START_EXPORT else EXPORT_WRITES
+        written = WORKING_FILES if basis not in EXPORT_BASES else EXPORT_WRITES
         self.staged = {'basis': basis, 'watch': watch, 'stamps': project(stamps, watch),
                        'sha256': hashlib.sha256(raw).hexdigest(), 'path': target, 'frozenAt': now,
                        'savedAtNs': max(stamp[1] for stamp in project(stamps, written))}
@@ -271,7 +330,7 @@ class HideoutStage:
         if not before or before[-1] != staged['stamps']:
             raise ProbeError('newest-hideout-save-not-frozen')
         # A working-file save is frozen whole; an opening export must also keep the working files away.
-        guarded = WORKING_FILES if staged['basis'] != RUN_START_EXPORT else TRACKED
+        guarded = WORKING_FILES if staged['basis'] not in EXPORT_BASES else TRACKED
         frozen = tuple(dict(zip(watch, staged['stamps'])).get(name) for name in guarded)
 
         def missed(stamps):
@@ -298,7 +357,7 @@ class HideoutStage:
 
     def same_run(self, staged, deadline):
         """The frozen opening save and the run save the game now holds belong to the same run."""
-        frozen = (staged['path'] / RUN_SLOT_FILES[0] if staged['basis'] == RUN_START_EXPORT else
+        frozen = (staged['path'] / RUN_SLOT_FILES[0] if staged['basis'] in EXPORT_BASES else
                   staged['path'] / WORKING_FILES[0])
         path = self.profile / WORKING_FILES[0]
         while True:
@@ -315,11 +374,11 @@ class HideoutStage:
             time.sleep(0.02)
         try:
             opening = frozen.read_bytes()
-            opening = self.inspect(exported_raw(opening) if staged['basis'] == RUN_START_EXPORT else opening)
+            opening = self.inspect(exported_raw(opening) if staged['basis'] in EXPORT_BASES else opening)
             departed = self.inspect(raw)
         except (OSError, ProbeError) as error:
             raise ProbeError('run-identity-unreadable') from error
-        if not opening_code(opening['code']):
+        if staged['basis'] in (RUN_START_SAVE, RUN_START_EXPORT) and not opening_code(opening['code']):
             raise ProbeError('not-a-run-opening-save')
         if departed['run'] != opening['run']:
             raise ProbeError('opening-save-of-another-run')
@@ -339,12 +398,14 @@ def clear_stale_stages(root, age=3600):
 
 
 def protect_departure(storage, profile, index, observed_ms, digest, staged, basis=PRE_DEPARTURE_SAVE,
-                      observation_path=None):
+                      observation_path=None, manual_snapshot=None):
     """Publish the frozen hideout save through Guardian's own hot-capture gates."""
     command = [str(TOOLS / 'CaptureDepartureSnapshot.exe'), str(storage), str(profile),
                str(index), str(int(observed_ms)), digest, str(staged), basis]
-    if observation_path:
-        command.append(str(observation_path))
+    if observation_path or manual_snapshot:
+        command.append(str(observation_path) if observation_path else '')
+    if manual_snapshot:
+        command.append(manual_snapshot)
     result = subprocess.run(command,
                             capture_output=True, timeout=30, check=False)
     if result.returncode != 0:

@@ -26,6 +26,8 @@ namespace NoReturnGuardian.Tests
             new TestCase("departure capture rejects stale, changed or unproven saves", TestDepartureCaptureRejected),
             new TestCase("a new run's opening save, frozen as working files or native exports, restores its hideout", TestRunStartDepartureCapture),
             new TestCase("a run-start departure capture must hold a run's opening save", TestRunStartDepartureRejected),
+            new TestCase("a confirmed manual original can be handed to a departure, working or exported", TestManualDepartureHandoff),
+            new TestCase("a changed or foreign manual source cannot authorize a departure", TestManualDepartureHandoffRejected),
             new TestCase("departure evidence tampering or downgrade is rejected", TestDepartureEvidenceTamperingRejected),
             new TestCase("departure retention keeps manual points and drops old departure records", TestDepartureRetention),
             new TestCase("trading-station stock is read and returned only within its own visit", TestVendorStockWitnessRules),
@@ -1668,6 +1670,62 @@ namespace NoReturnGuardian.Tests
             }
         }
 
+        private static void TestManualDepartureHandoff()
+        {
+            foreach (bool exported in new[] { false, true })
+            using (TestWorkspace workspace = TestWorkspace.WithCompleteSave())
+            {
+                if (exported) SyntheticSave.MakeNativeExportOnly(workspace.Profile);
+                SnapshotStore store = workspace.CreateStore();
+                Result<SnapshotRecord> manual = store.CaptureHotPreparation(workspace.Profile, null, true);
+                Assert.True(manual.Success, manual.Message);
+                ManualDepartureSource source = ManualDepartureSource.FromVerified(manual.Value);
+                Assert.True(source != null && source.MatchesFiles(workspace.Profile), "the receipt holds the original live source");
+                DepartureEvidence evidence = exported ? OpeningExportOf(store, workspace.Profile) : DepartureOf(store, workspace.Profile);
+                evidence.Basis = exported ? DepartureEvidence.ConfirmedManualExport : DepartureEvidence.ConfirmedManualSave;
+                evidence.ManualSnapshotId = manual.Value.Manifest.Id;
+                evidence.ObservedUtc = workspace.Clock.UtcNow.AddSeconds(1);
+                SyntheticSave.WriteComplete(workspace.Profile, "20244:9:0", 9);
+                Result<SnapshotRecord> capture = store.CaptureDeparturePreparation(workspace.Profile, evidence);
+                Assert.True(capture.Success, capture.Code + ": " + capture.Message);
+                Assert.Equal(source.SnapshotId, capture.Value.Manifest.DepartureManualSource.SnapshotId);
+                Assert.Equal("hideout", SnapshotPolicy.Use(capture.Value));
+                Assert.True(store.VerifySnapshot(capture.Value.Manifest.Id, true).Success, "the source proof verifies");
+                Assert.True(store.DeleteSnapshot(manual.Value.Manifest.Id).Success, "the original may be pruned later");
+                Assert.True(store.VerifySnapshot(capture.Value.Manifest.Id, true).Success, "a departure proof is self-contained");
+                SnapshotManifest tampered = FileTools.ReadJson<SnapshotManifest>(Path.Combine(capture.Value.DirectoryPath, "manifest.json"));
+                tampered.DepartureManualSource.Files[0].Sha256 = new string('c', 64);
+                tampered.ManifestSha256 = FileTools.ManifestHash(tampered);
+                FileTools.WriteJsonAtomic(Path.Combine(capture.Value.DirectoryPath, "manifest.json"), tampered);
+                Assert.False(store.VerifySnapshot(tampered.Id, true).Success, "even rehashed source evidence must match its payload");
+            }
+        }
+
+        private static void TestManualDepartureHandoffRejected()
+        {
+            using (TestWorkspace workspace = TestWorkspace.WithCompleteSave())
+            {
+                SnapshotStore store = workspace.CreateStore();
+                SnapshotRecord manual = store.CaptureHotPreparation(workspace.Profile, null, true).Value;
+                DepartureEvidence evidence = DepartureOf(store, workspace.Profile);
+                evidence.Basis = DepartureEvidence.ConfirmedManualSave;
+                evidence.ManualSnapshotId = manual.Manifest.Id;
+                string stagedRun = SaveLayout.CombineUnderProfile(evidence.StagedPath, SaveLayout.GameRunPath);
+                File.AppendAllText(stagedRun, "different", Encoding.UTF8);
+                Assert.Equal("departure_manual_source_mismatch", store.CaptureDeparturePreparation(workspace.Profile, evidence).Code);
+                evidence = DepartureOf(store, workspace.Profile);
+                evidence.Basis = DepartureEvidence.ConfirmedManualSave;
+                evidence.ManualSnapshotId = "missing";
+                Assert.Equal("departure_manual_source_mismatch", store.CaptureDeparturePreparation(workspace.Profile, evidence).Code);
+                evidence.ManualSnapshotId = manual.Manifest.Id;
+                string otherProfile = Path.Combine(workspace.Root, "another-profile");
+                Directory.CreateDirectory(otherProfile);
+                Assert.Equal("departure_manual_source_mismatch", store.CaptureDeparturePreparation(otherProfile, evidence).Code);
+                evidence.Basis = DepartureEvidence.PreDepartureSave;
+                Assert.Equal("departure_manual_source_mismatch", store.CaptureDeparturePreparation(workspace.Profile, evidence).Code);
+            }
+        }
+
         private static void TestRunStartDepartureRejected()
         {
             using (TestWorkspace workspace = TestWorkspace.WithCompleteSave())
@@ -3145,6 +3203,15 @@ namespace NoReturnGuardian.Tests
                 Assert.True(SnapshotPolicy.IsConfirmedPreparation(snapshot), "the repaired capture must stay restorable");
                 Result<SnapshotRecord> verified = store.VerifySnapshot(snapshot.Manifest.Id, true);
                 Assert.True(verified.Success, verified.Message);
+
+                ManualDepartureSource originalSource = ManualDepartureSource.FromVerified(snapshot);
+                Assert.True(originalSource.MatchesFiles(workspace.Profile), "the stock-repaired point hands off its original live source");
+                DepartureEvidence confirmedDeparture = DepartureOf(store, workspace.Profile);
+                confirmedDeparture.Basis = DepartureEvidence.ConfirmedManualSave;
+                confirmedDeparture.ManualSnapshotId = snapshot.Manifest.Id;
+                Result<SnapshotRecord> automatic = store.CaptureDeparturePreparation(workspace.Profile, confirmedDeparture);
+                Assert.True(automatic.Success, automatic.Message);
+                Assert.BytesEqual(stocked, File.ReadAllBytes(SnapshotPayload(automatic.Value, SaveLayout.GameRunPath)));
 
                 Result<RestoreOutcome> restore = store.Restore(
                     snapshot.Manifest.Id,

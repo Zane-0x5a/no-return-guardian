@@ -933,7 +933,7 @@ namespace NoReturnGuardian
             if (result.Success)
             {
                 LoadSnapshots(result.Value.Manifest.Id);
-                _recorder.Arm(result.Value.Manifest.Id);
+                _recorder.Arm(result.Value.Manifest.Id, confirmedManual: true);
                 if (!Visible && _tray != null)
                 {
                     _tray.Balloon(3000, "战备已保护", "之后死亡可以回到这份战备。", ToolTipIcon.Info);

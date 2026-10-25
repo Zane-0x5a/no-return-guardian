@@ -367,6 +367,24 @@ namespace NoReturnGuardian.Core
                     AppendCanonical(builder, "departureBasis", manifest.DepartureBasis);
                 }
             }
+            if (manifest.DepartureManualSource != null)
+            {
+                AppendCanonical(builder, "departureManualSource", "1");
+                manifest.DepartureManualSource.AppendHash(builder);
+            }
+            if (manifest.ManualNativeSourceEvidence != null)
+            {
+                AppendCanonical(builder, "manualNativeSource", "1");
+                foreach (SnapshotFileEntry file in manifest.ManualNativeSourceEvidence
+                    .OrderBy(item => item == null ? null : item.RelativePath, StringComparer.Ordinal))
+                {
+                    AppendCanonical(builder, "manualNativeRelative", file == null ? null : file.RelativePath);
+                    AppendCanonical(builder, "manualNativeLength", file == null ? null : file.Length.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture));
+                    AppendCanonical(builder, "manualNativeWritten", file == null ? null : file.LastWriteUtc);
+                    AppendCanonical(builder, "manualNativeHash", file == null ? null : file.Sha256);
+                }
+            }
             // Absent unless a lost trading-station stock was returned; older manifests keep their hash.
             if (manifest.VendorStockRepair != null)
             {

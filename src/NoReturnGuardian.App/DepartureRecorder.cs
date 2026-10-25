@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
 namespace NoReturnGuardian
@@ -29,6 +30,10 @@ namespace NoReturnGuardian
         private int _blockedPid;
         private DateTime _retryUtc;
         private string _notice;
+        private string _profile, _storage;
+        private int _gamePid;
+        private long _gameBirth;
+        private bool _protecting;
 
         /// <param name="enabled">截图模式下为 false：不启动任何记录器。</param>
         public DepartureRecorder(IGuardianHost host, bool enabled)
@@ -71,12 +76,12 @@ namespace NoReturnGuardian
         /// 保存为新战备，出发记录归新战备；保存不成时归这份战备。记录总是跟着这份战备的兵营里最近的一次出发，
         /// “重开战斗”重开的就是玩家刚打的那一场。rebuilt：这个兵营是原生恢复刚重建的，记录器同时替它看着。
         /// </summary>
-        public void Arm(string snapshotId, bool rebuilt = false)
+        public void Arm(string snapshotId, bool rebuilt = false, bool confirmedManual = false)
         {
-            Stop();
             string owner = string.IsNullOrEmpty(snapshotId) ? null : snapshotId;
             if (!_enabled || !NativeRecovery.Available || (owner == null && !AutoProtect))
             {
+                Stop();
                 return;
             }
 
@@ -87,10 +92,22 @@ namespace NoReturnGuardian
             }
             catch (InvalidOperationException)
             {
+                Stop();
                 return;
             }
 
+            // A manual capture updates this same hideout's owner; it must not discard a frozen save or
+            // restart the first-sight clock. Recovery/configuration changes still start a fresh watcher.
+            if (confirmedManual && !rebuilt && CanKeep(game) && SendManualConfirmation(owner, game))
+            {
+                _owner = owner;
+                _rebuilt = null;
+                return;
+            }
+            Stop();
             Start(game, owner);
+            if (confirmedManual && _process != null)
+                SendManualConfirmation(owner, game);
             if (rebuilt && _process != null)
             {
                 _rebuilt = new RebuiltHideout
@@ -101,6 +118,37 @@ namespace NoReturnGuardian
                     Recorder = _process,
                     RecorderLog = _log
                 };
+            }
+        }
+
+        private bool CanKeep(NativeRecovery.GameTarget game)
+        {
+            try
+            {
+                return _process != null && !_process.HasExited && _gamePid == game.Pid && _gameBirth == game.Birth
+                    && _protecting == AutoProtect
+                    && string.Equals(_profile, _host.Settings.ProfilePath, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(_storage, _host.Settings.StoragePath, StringComparison.OrdinalIgnoreCase);
+            }
+            catch (InvalidOperationException) { return false; }
+        }
+
+        private bool SendManualConfirmation(string snapshotId, NativeRecovery.GameTarget game)
+        {
+            try
+            {
+                _process.StandardInput.WriteLine(new JavaScriptSerializer().Serialize(new
+                {
+                    kind = "confirm-manual", snapshotId, pid = game.Pid,
+                    birth = game.Birth.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                }));
+                _process.StandardInput.Flush();
+                return true;
+            }
+            catch (Exception error) when (error is IOException || error is InvalidOperationException)
+            {
+                DiagnosticLog.Write("departure-handoff", error);
+                return false;
             }
         }
 
@@ -275,9 +323,14 @@ namespace NoReturnGuardian
                 _process = recorder;
                 _owner = owner;
                 _log = logPath;
+                _gamePid = game.Pid;
+                _gameBirth = game.Birth;
+                _profile = _host.Settings.ProfilePath;
+                _storage = _host.Settings.StoragePath;
+                _protecting = protecting;
                 recorder.EnableRaisingEvents = true;
                 recorder.Exited += (sender, args) =>
-                    _host.RunOnUiThread(() => Exited(recorder, owner, protecting, game.Pid, logPath));
+                    _host.RunOnUiThread(() => Exited(recorder, protecting, game.Pid, logPath));
             }
             catch (Exception error)
             {
@@ -293,7 +346,7 @@ namespace NoReturnGuardian
             }
         }
 
-        private void Exited(Process recorder, string owner, bool protecting, int pid, string logPath)
+        private void Exited(Process recorder, bool protecting, int pid, string logPath)
         {
             if (_rebuilt != null && ReferenceEquals(_rebuilt.Recorder, recorder))
             {
@@ -326,17 +379,17 @@ namespace NoReturnGuardian
                     }
                 }
 
-                Report(owner, protecting, pid, logPath, exitCode);
+                Report(protecting, pid, logPath, exitCode);
             }
 
             recorder.Dispose();
         }
 
-        private void Report(string owner, bool protecting, int pid, string logPath, int exitCode)
+        private void Report(bool protecting, int pid, string logPath, int exitCode)
         {
             string storage = _host.Settings.StoragePath;
             string protectedId = protecting ? NativeRecovery.ReadProtectedDeparture(logPath) : null;
-            string recordedId = protectedId ?? owner;
+            string recordedId = NativeRecovery.ReadRecordedDeparture(logPath);
             bool recorded = recordedId != null && NativeRecovery.HasDeparture(storage, recordedId);
             if (protectedId != null)
             {
@@ -356,6 +409,15 @@ namespace NoReturnGuardian
                 : "在守护器里") + "可直接重开这场战斗。";
             if (recorded)
             {
+                if (protecting && protectedId == null)
+                {
+                    const string fallback = "这次出发没有自动保存";
+                    _host.Toast(fallback, "neutral");
+                    _host.Notify(fallback,
+                        "这次出发已关联到之前的战备。重开会回到那次保护时的装备和资源。" + restart,
+                        ToolTipIcon.Warning);
+                    return;
+                }
                 string title = protectedId != null ? "已在出发时保存战备" : "已记录这次出发";
                 _host.Toast(title, "signal");
                 _host.Notify(title, restart, ToolTipIcon.Info);
